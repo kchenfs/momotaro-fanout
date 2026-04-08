@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Receipt — Momotaro Sushi</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        body { margin: 0; padding: 0; -webkit-font-smoothing: antialiased; font-family: 'Inter', sans-serif; }
+    </style>
+</head>
+<body style="margin: 0; padding: 0; background-color: #f8fafc;">
+    <table role="presentation" border="0" cellpadding="0" cellspacing="0" width="100%" style="font-family: 'Inter', sans-serif;">
+        <tr>
+            <td align="center" style="padding: 40px 16px; background-color: #f8fafc;">
+                <table role="presentation" border="0" cellpadding="0" cellspacing="0" width="100%" style="max-width: 600px; border-radius: 24px; border: 1px solid #e2e8f0; background-color: #ffffff; box-shadow: 0 1px 3px rgba(0,0,0,0.05);">
+                    <tr>
+                        <td style="background: linear-gradient(135deg, #1e293b 0%, #334155 100%); padding: 40px 32px; text-align: center; border-top-left-radius: 24px; border-top-right-radius: 24px;">
+                            <img src="https://momotarosushi.s3.ca-central-1.amazonaws.com/momotaro-logo.png" alt="Merchant avatar" width="80" height="80" style="width: 80px; height: 80px; border-radius: 50%; border: 4px solid #ffffff; box-shadow: 0 4px 6px rgba(0,0,0,0.1); object-fit: contain; margin: 0 auto; display: block;">
+                            <h1 style="margin: 12px 0 4px; font-size: 32px; font-weight: 600; color: #ffffff; letter-spacing: -0.025em;">Momotaro Sushi</h1>
+                            <p style="margin: 0; font-size: 13px; color: rgba(255, 255, 255, 0.85);">Order-ID #__RECEIPT_ID_PLACEHOLDER__</p>
+                        </td>
+                    </tr>
+                    <tr>
+                        <td style="padding: 24px 32px; background-color: #ffffff;">
+                            <table role="presentation" border="0" cellpadding="0" cellspacing="0" width="100%" style="border-radius: 16px; border: 1px solid #e2e8f0; background-color: #f8fafc;">
+                                <tr>
+                                    <td width="33.33%" align="left" style="padding: 20px; vertical-align: top;">
+                                        <div style="font-size: 11px; font-weight: 500; text-transform: uppercase; letter-spacing: 0.05em; color: #64748b; margin-bottom: 4px;">Amount paid</div>
+                                        <div style="font-size: 18px; font-weight: 600; color: #0f172a; letter-spacing: -0.025em;">__AMOUNT_PLACEHOLDER__</div>
+                                    </td>
+                                    <td width="33.33%" align="left" style="padding: 20px; vertical-align: top; border-left: 1px solid #e2e8f0; border-right: 1px solid #e2e8f0;">
+                                        <div style="font-size: 11px; font-weight: 500; text-transform: uppercase; letter-spacing: 0.05em; color: #64748b; margin-bottom: 4px;">Date paid</div>
+                                        <div style="font-size: 18px; font-weight: 600; color: #0f172a;">__DATE_PLACEHOLDER__</div>
+                                    </td>
+                                    <td width="33.33%" align="left" style="padding: 20px; vertical-align: top;">
+                                        <div style="font-size: 11px; font-weight: 500; text-transform: uppercase; letter-spacing: 0.05em; color: #64748b; margin-bottom: 4px;">Payment method</div>
+                                        <div style="padding-top: 2px;">
+                                            __PAYMENT_METHOD_CHIPS_PLACEHOLDER__
+                                        </div>
+                                    </td>
+                                </tr>
+                            </table>
+                            
+                            <table role="presentation" border="0" cellpadding="0" cellspacing="0" width="100%" style="margin-top: 32px; padding: 24px; border-radius: 16px; border: 1px solid #e2e8f0; background-color: #ffffff;">
+                                <tr>
+                                    <td style="font-size: 20px; font-weight: 600; color: #0f172a; padding-bottom: 16px; border-bottom: 1px solid #e2e8f0;">Summary</td>
+                                </tr>
+                                <tr>
+                                    <td style="padding: 16px 0;">
+                                        <table role="presentation" border="0" cellpadding="0" cellspacing="0" width="100%">
+                                            __ITEMS_LIST_PLACEHOLDER__
+                                        </table>
+                                    </td>
+                                </tr>
+                                <tr>
+                                    <td style="padding-top: 16px; border-top: 1px solid #e2e8f0;">
+                                        <table role="presentation" border="0" cellpadding="0" cellspacing="0" width="100%">
+                                            <tr>
+                                                <td style="padding: 8px 0; font-size: 14px; color: #64748b;">Subtotal</td>
+                                                <td style="padding: 8px 0; font-size: 14px; color: #0f172a; font-weight: 500; text-align: right;">__SUBTOTAL_PLACEHOLDER__</td>
+                                            </tr>
+                                            <tr>
+                                                <td style="padding: 8px 0; font-size: 14px; color: #64748b;">Tax</td>
+                                                <td style="padding: 8px 0; font-size: 14px; color: #0f172a; font-weight: 500; text-align: right;">__TAX_PLACEHOLDER__</td>
+                                            </tr>
+                                            <tr>
+                                                <td style="padding-top: 16px; font-size: 14px; color: #64748b; font-weight: 600;">Total paid</td>
+                                                <td style="padding-top: 16px; font-size: 16px; font-weight: 600; color: #0f172a; text-align: right;">__AMOUNT_PLACEHOLDER__</td>
+                                            </tr>
+                                        </table>
+                                    </td>
+                                </tr>
+                            </table>
+                        </td>
+                    </tr>
+                </table>
+                 <p style="margin: 24px auto 0; text-align: center; font-size: 12px; color: #64748b;">
+                    For questions or changes to your order, please call us at (416) 766-2888.
+                </p>
+            </td>
+        </tr>
+    </table>
+</body>
+</html>
