@@ -1,10 +1,10 @@
-*.swp
-package-lock.json
-__pycache__
-.pytest_cache
-.venv
-*.egg-info
+# Local secrets — CDK reads these at synth/deploy time via load_dotenv().
+# Must never be committed: contains live Stripe keys.
+.env
 
-# CDK asset staging directory
-.cdk.staging
-cdk.out
+# Python / CDK build artifacts
+__pycache__/
+*.py[cod]
+.pytest_cache/
+cdk.out/
+.venv/
