@@ -7,7 +7,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 from decimal import Decimal
 
-stripe.api_key = os.environ.get('STRIPE_CHECKOUT_RAK')
+stripe.api_key = os.environ.get('STRIPE_CHECKOUT_API_KEY')
 dynamodb = boto3.resource('dynamodb')
 table = dynamodb.Table(os.environ.get('DYNAMODB_TABLE_NAME'))
 

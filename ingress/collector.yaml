@@ -1,3 +1,7 @@
+# collector.yaml is now ONLY needed for routing traces to your Tempo backend.
+# Metrics are handled automatically by the ADOT layer via OTEL_METRICS_EXPORTER=awsemf
+# and go directly to CloudWatch — no collector pipeline needed for metrics.
+
 receivers:
   otlp:
     protocols:
@@ -10,11 +14,16 @@ exporters:
   logging:
     verbosity: detailed
   otlphttp:
-    # Point this to your secure Traefik Ingress route
     endpoint: "https://traces.momotarosushi.ca"
+    timeout: 3s
+    retry_on_failure:
+      enabled: true
+      initial_interval: 1s
+      max_elapsed_time: 5s
 
 service:
   pipelines:
     traces:
       receivers: [otlp]
-      exporters: [logging, otlphttp] # Sends to both CloudWatch logs and your K3s server
+      exporters: [logging, otlphttp]
+    # No metrics pipeline here — metrics go to CloudWatch via EMF automatically

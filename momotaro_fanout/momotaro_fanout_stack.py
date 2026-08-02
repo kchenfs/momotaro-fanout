@@ -19,7 +19,7 @@ class MomotaroFanoutStack(Stack):
         super().__init__(scope, construct_id, **kwargs)
 
         # ==========================================
-        # 0. CONFIGURATION VARIABLES (Loaded securely)
+        # 0. CONFIGURATION VARIABLES
         # ==========================================
         DYNAMODB_TABLE_NAME = os.getenv("DYNAMODB_TABLE_NAME") 
         IOT_ENDPOINT_URL = os.getenv("IOT_ENDPOINT_URL")
@@ -27,23 +27,40 @@ class MomotaroFanoutStack(Stack):
         VERIFIED_SENDER_EMAIL = os.getenv("VERIFIED_SENDER_EMAIL")
         STRIPE_SECRET_KEY = os.getenv("STRIPE_SECRET_KEY")
         STRIPE_WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET")
-        STRIPE_CHECKOUT_RAK = os.getenv("STRIPE_CHECKOUT_RAK")
+        STRIPE_CHECKOUT_API_KEY = os.getenv("STRIPE_CHECKOUT_API_KEY")
 
         if not STRIPE_SECRET_KEY:
             raise ValueError("STRIPE_SECRET_KEY is missing. Check your .env file!")
 
         # ==========================================
-        # 1. OPENTELEMETRY TRACING LAYER SETUP
+        # 1. OPENTELEMETRY LAYER SETUP (Updated)
         # ==========================================
-        # Define the ADOT layer
-        adot_layer_arn = "arn:aws:lambda:ca-central-1:901920570463:layer:aws-otel-python-amd64-ver-1-24-0:1"
+        # NEW recommended layer for ca-central-1 (replaces legacy aws-otel-python-amd64-ver-1-24-0)
+        adot_layer_arn = "arn:aws:lambda:ca-central-1:615299751070:layer:AWSOpenTelemetryDistroPython:21"
         adot_layer = _lambda.LayerVersion.from_layer_version_arn(self, "AdotLayer", adot_layer_arn)
 
-        # Define the common OTel environment variables to inject into all Lambdas
+        # IAM policy required by the new ADOT layer
+        adot_policy = iam.ManagedPolicy.from_aws_managed_policy_name(
+            "CloudWatchLambdaApplicationSignalsExecutionRolePolicy"
+        )
+
+        # OTel environment variables — metrics go to CloudWatch via EMF
+        # No collector.yaml needed for metrics with the new layer
         otel_env_vars = {
-            "OPENTELEMETRY_COLLECTOR_CONFIG_FILE": "/var/task/collector.yaml", 
-            "AWS_LAMBDA_EXEC_WRAPPER": "/opt/otel-instrument" 
+            "AWS_LAMBDA_EXEC_WRAPPER": "/opt/otel-instrument",
+            "OTEL_METRICS_EXPORTER": "awsemf",                      # Enables metrics via CloudWatch EMF
+            "OTEL_EXPORTER_OTLP_PROTOCOL": "http/protobuf",         # Required alongside awsemf
+            "OTEL_SERVICE_NAME": "momotaro-sushi",                   # Groups all lambdas in one service
+            "OTEL_PYTHON_DISABLED_INSTRUMENTATIONS": "none",         # Enable all auto-instrumentation
         }
+
+        # Shared branded-receipt email composition + SES send logic, used by
+        # ReceiptEmailSender (SNS-triggered) and OrderConfirmationApi (below).
+        email_receipt_layer = _lambda.LayerVersion(self, "EmailReceiptLayer",
+            code=_lambda.Code.from_asset("email_lib"),
+            compatible_runtimes=[_lambda.Runtime.PYTHON_3_12],
+            description="Shared branded-receipt email composition + SES send logic"
+        )
 
         # ==========================================
         # 2. THE MESSAGE BUS
@@ -53,165 +70,200 @@ class MomotaroFanoutStack(Stack):
         )
 
         # ==========================================
-        # 3. THE SUBSCRIBERS (WORKER LAMBDAS)
+        # 3. HELPER: attach ADOT policy to a function
+        # ==========================================
+        def attach_adot_policy(fn: _lambda.Function):
+            fn.role.add_managed_policy(adot_policy)
+
+        # ==========================================
+        # 4. THE SUBSCRIBERS (WORKER LAMBDAS)
         # ==========================================
         
-        db_worker = _lambda.Function(self, "DbWorker",
+        dine_in_order_writer = _lambda.Function(self, "DineInOrderWriter",
             runtime=_lambda.Runtime.PYTHON_3_12,
-            handler="db_worker.handler",
-            code=_lambda.Code.from_asset("lambda_workers"),
-            layers=[adot_layer], # <--- Attach ADOT Layer
+            handler="dine_in_order_writer.handler",
+            code=_lambda.Code.from_asset("workers"),
+            layers=[adot_layer],
             environment={
-                **otel_env_vars, # <--- Inject OTel variables
+                **otel_env_vars,
                 "DYNAMODB_TABLE_NAME": DYNAMODB_TABLE_NAME
             }
         )
-        
+        attach_adot_policy(dine_in_order_writer)
+
         order_topic.add_subscription(
             subs.LambdaSubscription(
-                db_worker,
+                dine_in_order_writer,
                 filter_policy={
                     "orderType": sns.SubscriptionFilter.string_filter(allowlist=["dine-in"])
                 }
             )
         )
-        
-        db_worker.add_to_role_policy(iam.PolicyStatement(
+        dine_in_order_writer.add_to_role_policy(iam.PolicyStatement(
             actions=["dynamodb:PutItem"],
             resources=[f"arn:aws:dynamodb:{self.region}:{self.account}:table/{DYNAMODB_TABLE_NAME}"]
         ))
 
-        takeout_db_worker = _lambda.Function(self, "TakeoutDbWorker",
+        takeout_payment_updater = _lambda.Function(self, "TakeoutPaymentUpdater",
             runtime=_lambda.Runtime.PYTHON_3_12,
-            handler="db_worker_takeout.handler",
-            code=_lambda.Code.from_asset("lambda_workers"),
-            layers=[adot_layer], # <--- Attach ADOT Layer
+            handler="takeout_payment_updater.handler",
+            code=_lambda.Code.from_asset("workers"),
+            layers=[adot_layer],
             environment={
-                **otel_env_vars, # <--- Inject OTel variables
+                **otel_env_vars,
                 "DYNAMODB_TABLE_NAME": DYNAMODB_TABLE_NAME
             }
         )
-        
+        attach_adot_policy(takeout_payment_updater)
+
         order_topic.add_subscription(
             subs.LambdaSubscription(
-                takeout_db_worker,
+                takeout_payment_updater,
                 filter_policy={
                     "orderType": sns.SubscriptionFilter.string_filter(allowlist=["takeout"])
                 }
             )
         )
-        
-        takeout_db_worker.add_to_role_policy(iam.PolicyStatement(
+        takeout_payment_updater.add_to_role_policy(iam.PolicyStatement(
             actions=["dynamodb:UpdateItem"],
             resources=[f"arn:aws:dynamodb:{self.region}:{self.account}:table/{DYNAMODB_TABLE_NAME}"]
         ))
 
-        kitchen_worker = _lambda.Function(self, "KitchenWorker",
+        kitchen_display_publisher = _lambda.Function(self, "KitchenDisplayPublisher",
             runtime=_lambda.Runtime.PYTHON_3_12,
-            handler="kitchen_worker.handler",
-            code=_lambda.Code.from_asset("lambda_workers"),
-            layers=[adot_layer], # <--- Attach ADOT Layer
+            handler="kitchen_display_publisher.handler",
+            code=_lambda.Code.from_asset("workers"),
+            layers=[adot_layer],
             timeout=Duration.seconds(20),
             environment={
-                **otel_env_vars, # <--- Inject OTel variables
-                "IOT_ENDPOINT": "your-iot-endpoint.amazonaws.com",
+                **otel_env_vars,
+                "IOT_ENDPOINT": "a2ucwnwtscss1f-ats.iot.ca-central-1.amazonaws.com",
                 "PRINTER_TOPIC": "printers/orders/print",
             }
         )
-        order_topic.add_subscription(subs.LambdaSubscription(kitchen_worker))
-
-        kitchen_worker.add_to_role_policy(iam.PolicyStatement(
+        attach_adot_policy(kitchen_display_publisher)
+        order_topic.add_subscription(subs.LambdaSubscription(kitchen_display_publisher))
+        kitchen_display_publisher.add_to_role_policy(iam.PolicyStatement(
             actions=["iot:Publish"],
             resources=[f"arn:aws:iot:{self.region}:{self.account}:topic/{PRINTER_MQTT_TOPIC}"]
         ))
 
-        email_worker = _lambda.Function(self, "EmailWorker",
+        receipt_email_sender = _lambda.Function(self, "ReceiptEmailSender",
             runtime=_lambda.Runtime.PYTHON_3_12,
-            handler="email_worker.handler",
-            code=_lambda.Code.from_asset("lambda_workers"),
-            layers=[adot_layer], # <--- Attach ADOT Layer
+            handler="receipt_email_sender.handler",
+            code=_lambda.Code.from_asset("workers"),
+            layers=[adot_layer, email_receipt_layer],
             environment={
-                **otel_env_vars, # <--- Inject OTel variables
+                **otel_env_vars,
                 "SENDER_EMAIL": VERIFIED_SENDER_EMAIL
             }
         )
+        attach_adot_policy(receipt_email_sender)
         order_topic.add_subscription(
             subs.LambdaSubscription(
-                email_worker,
+                receipt_email_sender,
                 filter_policy={
                     "orderType": sns.SubscriptionFilter.string_filter(allowlist=["takeout"])
                 }
             )
         )
-
-        email_worker.add_to_role_policy(iam.PolicyStatement(
+        receipt_email_sender.add_to_role_policy(iam.PolicyStatement(
             actions=["ses:SendEmail", "ses:SendRawEmail"],
             resources=["*"] 
         ))
 
         # ==========================================
-        # 4. THE PUBLISHERS (INGRESS APIS)
+        # 5. THE PUBLISHERS (INGRESS APIS)
         # ==========================================
-
         stripe_layer = _lambda.LayerVersion(self, "StripeLayer",
             code=_lambda.Code.from_asset("momotaro_layer"),
             compatible_runtimes=[_lambda.Runtime.PYTHON_3_12],
             description="Contains Stripe and its dependencies"
         )    
 
-        
         takeout_ingress = _lambda.Function(self, "TakeoutIngress",
             runtime=_lambda.Runtime.PYTHON_3_12,
             handler="takeout_ingress.handler",
-            code=_lambda.Code.from_asset("lambda_ingress"),
-            layers=[stripe_layer, adot_layer],  # <--- Attach ADOT alongside Stripe
+            code=_lambda.Code.from_asset("ingress"),
+            layers=[stripe_layer, adot_layer],
             timeout=Duration.seconds(20),
             environment={
-                **otel_env_vars, # <--- Inject OTel variables
+                **otel_env_vars,
                 "SNS_TOPIC_ARN": order_topic.topic_arn,
                 "STRIPE_SECRET_KEY": STRIPE_SECRET_KEY,
                 "STRIPE_WEBHOOK_SECRET": STRIPE_WEBHOOK_SECRET,
                 "DYNAMODB_TABLE_NAME": DYNAMODB_TABLE_NAME 
             }
         )
+        attach_adot_policy(takeout_ingress)
         order_topic.grant_publish(takeout_ingress)
         apigw.LambdaRestApi(self, "TakeoutApiEndpoint", handler=takeout_ingress)
-
         takeout_ingress.add_to_role_policy(iam.PolicyStatement(
             actions=["dynamodb:GetItem"],
             resources=[f"arn:aws:dynamodb:{self.region}:{self.account}:table/{DYNAMODB_TABLE_NAME}"]
         ))
 
-
         dine_in_ingress = _lambda.Function(self, "DineInIngress",
             runtime=_lambda.Runtime.PYTHON_3_12,
             handler="dine_in_ingress.handler",
-            code=_lambda.Code.from_asset("lambda_ingress"),
-            layers=[adot_layer], # <--- Attach ADOT Layer
+            code=_lambda.Code.from_asset("ingress"),
+            layers=[adot_layer],
+            timeout=Duration.seconds(20),
+            memory_size=512,
             environment={
-                **otel_env_vars, # <--- Inject OTel variables
+                **otel_env_vars,
                 "SNS_TOPIC_ARN": order_topic.topic_arn
             }
         )
+        attach_adot_policy(dine_in_ingress)
         order_topic.grant_publish(dine_in_ingress)
         apigw.LambdaRestApi(self, "DineInApiEndpoint", handler=dine_in_ingress)
 
         checkout_api = _lambda.Function(self, "CheckoutApi",
             runtime=_lambda.Runtime.PYTHON_3_12,
             handler="checkout_api.handler",
-            code=_lambda.Code.from_asset("lambda_ingress"),
-            layers=[stripe_layer, adot_layer], # <--- Attach ADOT alongside Stripe
+            code=_lambda.Code.from_asset("ingress"),
+            layers=[stripe_layer, adot_layer],
             timeout=Duration.seconds(20),  
             memory_size=512,               
             environment={
-                **otel_env_vars, # <--- Inject OTel variables
-                "STRIPE_CHECKOUT_RAK": STRIPE_CHECKOUT_RAK,
+                **otel_env_vars,
+                "STRIPE_CHECKOUT_API_KEY": STRIPE_CHECKOUT_API_KEY,
                 "DYNAMODB_TABLE_NAME": DYNAMODB_TABLE_NAME 
             }
         )
-
+        attach_adot_policy(checkout_api)
         checkout_api.add_to_role_policy(iam.PolicyStatement(
             actions=["dynamodb:PutItem"],
             resources=[f"arn:aws:dynamodb:{self.region}:{self.account}:table/{DYNAMODB_TABLE_NAME}"]
         ))
         apigw.LambdaRestApi(self, "CheckoutApiEndpoint", handler=checkout_api)
+
+        order_confirmation_api = _lambda.Function(self, "OrderConfirmationApi",
+            runtime=_lambda.Runtime.PYTHON_3_12,
+            handler="order_confirmation_api.handler",
+            code=_lambda.Code.from_asset("ingress"),
+            layers=[email_receipt_layer, adot_layer],
+            timeout=Duration.seconds(15),
+            memory_size=256,
+            environment={
+                **otel_env_vars,
+                "DYNAMODB_TABLE_NAME": DYNAMODB_TABLE_NAME,
+                "SENDER_EMAIL": VERIFIED_SENDER_EMAIL,
+                "ALLOWED_ORIGIN": "*",
+            }
+        )
+        attach_adot_policy(order_confirmation_api)
+        order_confirmation_api.add_to_role_policy(iam.PolicyStatement(
+            actions=["dynamodb:GetItem", "dynamodb:UpdateItem"],
+            resources=[f"arn:aws:dynamodb:{self.region}:{self.account}:table/{DYNAMODB_TABLE_NAME}"]
+        ))
+        order_confirmation_api.add_to_role_policy(iam.PolicyStatement(
+            actions=["sns:Publish"],
+            resources=["*"]  # SNS SMS publish targets a phone number, not a topic ARN
+        ))
+        order_confirmation_api.add_to_role_policy(iam.PolicyStatement(
+            actions=["ses:SendEmail", "ses:SendRawEmail"],
+            resources=["*"]
+        ))
+        apigw.LambdaRestApi(self, "OrderConfirmationApiEndpoint", handler=order_confirmation_api)
