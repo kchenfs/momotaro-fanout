@@ -8,6 +8,7 @@ from aws_cdk import (
     aws_lambda as _lambda,
     aws_apigateway as apigw,
     aws_iam as iam,
+    aws_iot as iot,
 )
 from constructs import Construct
 
@@ -28,6 +29,8 @@ class MomotaroFanoutStack(Stack):
         STRIPE_SECRET_KEY = os.getenv("STRIPE_SECRET_KEY")
         STRIPE_WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET")
         STRIPE_CHECKOUT_API_KEY = os.getenv("STRIPE_CHECKOUT_API_KEY")
+        TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+        PRINT_STATUS_TOPIC = os.getenv("PRINT_STATUS_TOPIC", "kitchen/print/status")
 
         if not STRIPE_SECRET_KEY:
             raise ValueError("STRIPE_SECRET_KEY is missing. Check your .env file!")
@@ -171,6 +174,46 @@ class MomotaroFanoutStack(Stack):
             actions=["ses:SendEmail", "ses:SendRawEmail"],
             resources=["*"] 
         ))
+
+        # Printer health alerting. The printer-listener reports the outcome of
+        # every print attempt on the kitchen/print/status MQTT topic; until now
+        # nothing consumed it, so paper-out and print failures were only visible
+        # in a log file on the restaurant machine. The IoT rule below filters out
+        # the healthy case so this only fires on real problems.
+        print_status_alerter = _lambda.Function(self, "PrintStatusAlerter",
+            runtime=_lambda.Runtime.PYTHON_3_12,
+            handler="print_status_alerter.handler",
+            code=_lambda.Code.from_asset("workers"),
+            layers=[adot_layer],
+            timeout=Duration.seconds(15),
+            environment={
+                **otel_env_vars,
+                "TELEGRAM_CHAT_ID": TELEGRAM_CHAT_ID,
+                "TELEGRAM_TOKEN_PARAM": "/momotaro/prod/TELEGRAM_BOT_TOKEN",
+            }
+        )
+        attach_adot_policy(print_status_alerter)
+        print_status_alerter.add_to_role_policy(iam.PolicyStatement(
+            actions=["ssm:GetParameter"],
+            resources=[f"arn:aws:ssm:{self.region}:{self.account}:parameter/momotaro/prod/TELEGRAM_BOT_TOKEN"]
+        ))
+
+        print_status_rule = iot.CfnTopicRule(self, "PrintStatusAlertRule",
+            rule_name="MomotaroPrintStatusAlert",
+            topic_rule_payload=iot.CfnTopicRule.TopicRulePayloadProperty(
+                sql=f"SELECT * FROM '{PRINT_STATUS_TOPIC}' WHERE status <> 'OK'",
+                aws_iot_sql_version="2016-03-23",
+                actions=[iot.CfnTopicRule.ActionProperty(
+                    lambda_=iot.CfnTopicRule.LambdaActionProperty(
+                        function_arn=print_status_alerter.function_arn
+                    )
+                )]
+            )
+        )
+        print_status_alerter.add_permission("AllowIotInvoke",
+            principal=iam.ServicePrincipal("iot.amazonaws.com"),
+            source_arn=print_status_rule.attr_arn
+        )
 
         # ==========================================
         # 5. THE PUBLISHERS (INGRESS APIS)
