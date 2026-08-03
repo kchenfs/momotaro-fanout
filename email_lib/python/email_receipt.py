@@ -55,7 +55,13 @@ def send_receipt_email(order_data, recipient_email, sender_email):
         # priced at the $2.50 unit price makes the items visibly fail to add up
         # to the total. 'subtotal' is stored per item at checkout; fall back to
         # price * quantity for orders written before that field existed.
-        line_total = float(item.get('subtotal', float(item.get('price', 0)) * qty))
+        # Coerce to float BEFORE arithmetic: boto3 hands back DynamoDB numbers as
+        # Decimal, and float * Decimal raises TypeError. qty itself is left alone
+        # so a Decimal('1') still renders as "1x", not "1.0x".
+        line_total = item.get('subtotal')
+        if line_total is None:
+            line_total = float(item.get('price', 0)) * float(qty)
+        line_total = float(line_total)
         items_html_rows.append(f"""
         <tr>
             <td style="padding: 12px 0; font-size: 14px; color: #0f172a; border-bottom: 1px solid #f1f5f9;">

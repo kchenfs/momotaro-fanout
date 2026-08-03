@@ -1,3 +1,4 @@
+from decimal import Decimal
 from unittest.mock import MagicMock
 import email_receipt
 
@@ -49,6 +50,27 @@ def test_multi_quantity_line_shows_line_total_not_unit_price(monkeypatch):
     # makes the line items visibly fail to add up to the total.
     assert "CA$5.00" in html
     assert "CA$2.50" not in html
+
+
+def test_handles_decimal_values_from_dynamodb(monkeypatch):
+    # boto3 returns every DynamoDB number as a Decimal, and Python refuses to
+    # multiply float by Decimal. Rendering must survive an order read straight
+    # from the table, including an item with no stored 'subtotal'.
+    order = {
+        "orderId": "TKOT-DEC",
+        "orderDate": "2026-08-02T20:50:00-04:00",
+        "total": Decimal("2.26"),
+        "items": [
+            {"name": "Wasabi", "quantity": Decimal("1"), "price": Decimal("1.00")},
+            {"name": "Ginger", "quantity": Decimal("1"), "price": Decimal("1.00"),
+             "subtotal": Decimal("1.00")},
+        ],
+    }
+    html = _render(order, monkeypatch)
+
+    assert "Wasabi" in html and "Ginger" in html
+    assert "CA$1.00" in html
+    assert "__" not in html
 
 
 def test_line_total_falls_back_to_price_times_quantity(monkeypatch):
