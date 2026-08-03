@@ -51,14 +51,18 @@ def send_receipt_email(order_data, recipient_email, sender_email):
     for item in order_data.get('items', []):
         name = item.get('name', 'Item')
         qty = item.get('quantity', 1)
-        price = float(item.get('price', 0))
+        # Show what the LINE cost, not the unit price: a "2x Miso Soup" row
+        # priced at the $2.50 unit price makes the items visibly fail to add up
+        # to the total. 'subtotal' is stored per item at checkout; fall back to
+        # price * quantity for orders written before that field existed.
+        line_total = float(item.get('subtotal', float(item.get('price', 0)) * qty))
         items_html_rows.append(f"""
         <tr>
             <td style="padding: 12px 0; font-size: 14px; color: #0f172a; border-bottom: 1px solid #f1f5f9;">
                 {qty}x {name}
             </td>
             <td style="padding: 12px 0; font-size: 14px; color: #0f172a; font-weight: 500; text-align: right; border-bottom: 1px solid #f1f5f9;">
-                CA${price:.2f}
+                CA${line_total:.2f}
             </td>
         </tr>
         """)
