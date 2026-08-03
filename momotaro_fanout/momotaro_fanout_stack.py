@@ -9,6 +9,8 @@ from aws_cdk import (
     aws_apigateway as apigw,
     aws_iam as iam,
     aws_iot as iot,
+    aws_cloudwatch as cloudwatch,
+    aws_cloudwatch_actions as cw_actions,
 )
 from constructs import Construct
 
@@ -31,6 +33,10 @@ class MomotaroFanoutStack(Stack):
         STRIPE_CHECKOUT_API_KEY = os.getenv("STRIPE_CHECKOUT_API_KEY")
         TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
         PRINT_STATUS_TOPIC = os.getenv("PRINT_STATUS_TOPIC", "kitchen/print/status")
+        # Alarm when month-to-date SMS spend reaches this. Must be raised in step
+        # with the SNS MonthlySpendLimit quota — the point is to fire BEFORE the
+        # cap, since past the cap SMS fails silently (publish succeeds, nothing sends).
+        SMS_SPEND_ALARM_USD = float(os.getenv("SMS_SPEND_ALARM_USD", "0.80"))
 
         if not STRIPE_SECRET_KEY:
             raise ValueError("STRIPE_SECRET_KEY is missing. Check your .env file!")
@@ -214,6 +220,78 @@ class MomotaroFanoutStack(Stack):
             principal=iam.ServicePrincipal("iot.amazonaws.com"),
             source_arn=print_status_rule.attr_arn
         )
+
+        # Infrastructure alarms -> Telegram. Kept on its own topic rather than
+        # reusing order_topic, which fans out to the order workers.
+        ops_alert_topic = sns.Topic(self, "OpsAlertsTopic",
+            display_name="Momotaro Infrastructure Alerts"
+        )
+
+        ops_alerter = _lambda.Function(self, "OpsAlerter",
+            runtime=_lambda.Runtime.PYTHON_3_12,
+            handler="ops_alerter.handler",
+            code=_lambda.Code.from_asset("workers"),
+            layers=[adot_layer],
+            timeout=Duration.seconds(15),
+            environment={
+                **otel_env_vars,
+                "TELEGRAM_CHAT_ID": TELEGRAM_CHAT_ID,
+                "TELEGRAM_TOKEN_PARAM": "/momotaro/prod/TELEGRAM_BOT_TOKEN",
+            }
+        )
+        attach_adot_policy(ops_alerter)
+        ops_alerter.add_to_role_policy(iam.PolicyStatement(
+            actions=["ssm:GetParameter"],
+            resources=[f"arn:aws:ssm:{self.region}:{self.account}:parameter/momotaro/prod/TELEGRAM_BOT_TOKEN"]
+        ))
+        ops_alert_topic.add_subscription(subs.LambdaSubscription(ops_alerter))
+
+        # SNS publishes SMS spend to CloudWatch only in us-east-1, regardless of
+        # the region the message was sent from — so the alarm must live there too.
+        sms_spend_alarm = cloudwatch.Alarm(self, "SmsSpendAlarm",
+            alarm_name="MomotaroSmsSpendApproachingLimit",
+            alarm_description=(
+                "SNS SMS month-to-date spend is approaching the account limit. "
+                "Once the limit is reached, texts stop sending silently — order "
+                "confirmation SMS will fail with no error. Raise the SNS "
+                "MonthlySpendLimit quota, then raise SMS_SPEND_ALARM_USD to match."
+            ),
+            metric=cloudwatch.Metric(
+                namespace="AWS/SNS",
+                metric_name="SMSMonthToDateSpentUSD",
+                statistic="Maximum",
+                period=Duration.hours(1),
+                region="us-east-1",
+            ),
+            threshold=SMS_SPEND_ALARM_USD,
+            evaluation_periods=1,
+            comparison_operator=cloudwatch.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
+            # No SMS activity publishes no datapoints; that is healthy, not unknown.
+            treat_missing_data=cloudwatch.TreatMissingData.NOT_BREACHING,
+        )
+        sms_spend_alarm.add_alarm_action(cw_actions.SnsAction(ops_alert_topic))
+        sms_spend_alarm.add_ok_action(cw_actions.SnsAction(ops_alert_topic))
+
+        # Role SNS assumes to write SMS delivery receipts to CloudWatch Logs.
+        # Without this there is no record of whether a text reached the handset —
+        # only that the publish call didn't error. Wiring this role into the
+        # account's SMS attributes is a one-time CLI step (see README/runbook),
+        # as SMS attributes aren't exposed to CloudFormation.
+        sns_delivery_status_role = iam.Role(self, "SnsSmsDeliveryStatusRole",
+            role_name="MomotaroSnsSmsDeliveryStatusRole",
+            assumed_by=iam.ServicePrincipal("sns.amazonaws.com"),
+            description="Lets SNS write SMS delivery status logs to CloudWatch Logs",
+        )
+        sns_delivery_status_role.add_to_policy(iam.PolicyStatement(
+            actions=[
+                "logs:CreateLogGroup",
+                "logs:CreateLogStream",
+                "logs:PutLogEvents",
+                "logs:PutMetricFilter",
+                "logs:PutRetentionPolicy",
+            ],
+            resources=["*"],
+        ))
 
         # ==========================================
         # 5. THE PUBLISHERS (INGRESS APIS)
