@@ -364,6 +364,12 @@ class MomotaroFanoutStack(Stack):
             actions=["dynamodb:PutItem"],
             resources=[f"arn:aws:dynamodb:{self.region}:{self.account}:table/{DYNAMODB_TABLE_NAME}"]
         ))
+        # Server-side price recompute scans the canonical menu table so the
+        # charged amount never trusts the client-supplied total.
+        checkout_api.add_to_role_policy(iam.PolicyStatement(
+            actions=["dynamodb:Scan"],
+            resources=[f"arn:aws:dynamodb:{self.region}:{self.account}:table/MomotaroSushiMenu_DB"]
+        ))
         apigw.LambdaRestApi(self, "CheckoutApiEndpoint", handler=checkout_api)
 
         order_confirmation_api = _lambda.Function(self, "OrderConfirmationApi",

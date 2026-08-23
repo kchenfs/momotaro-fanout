@@ -1,7 +1,10 @@
 # Security hardening backlog — deployed checkout/notification lambdas
 
-**Status:** open, un-deployed. Tracked separately from the takeout pickup-name
-feature so it does not ride behind it.
+**Status:** partially addressed. #1 and #2 are **fixed in code (authoritative
+`ingress/checkout_api.py` + a CDK `dynamodb:Scan` grant), pending `cdk deploy`.**
+#3 is still open (approach chosen: HMAC token — see below). Secondary hygiene
+items remain open. Tracked separately from the takeout pickup-name feature so it
+does not ride behind it.
 
 **Discovered:** 2026-08-22, while diffing the deployed lambdas against the
 `TableTap2.0/lambda/*.py` mirrors for the pickup-name work. Independently
@@ -19,25 +22,28 @@ confirmed by an automated security review.
 
 ## Findings (all HIGH, all live in production)
 
-### 1. Price manipulation — `ingress/checkout_api.py`
+### 1. Price manipulation — `ingress/checkout_api.py` — FIXED IN CODE, PENDING DEPLOY
 
-The real-order branch does `amount = int(body.get('amount', 0))` and passes it
+The real-order branch did `amount = int(body.get('amount', 0))` and passed it
 straight to `stripe.PaymentIntent.create(...)` and into the DynamoDB `total`. A
-crafted request pays an arbitrary amount.
+crafted request paid an arbitrary amount.
 
-**Fix (exists, undeployed):** the mirror's `_compute_order_total_cents()`
-recomputes the total server-side from `MomotaroSushiMenu_DB` (canonical price +
-option modifiers + 13% tax, `MAX_ITEMS` cap), ignoring the client `amount`.
-Port it here and deploy.
+**Fix (applied):** `_compute_order_total_cents()` now recomputes the total
+server-side from `MomotaroSushiMenu_DB` (canonical price + option modifiers +
+13% tax, `MAX_ITEMS` cap), ignoring the client `amount`; unknown item / bad
+quantity / too many items returns 400. The CheckoutApi role gained a
+`dynamodb:Scan` grant on `MomotaroSushiMenu_DB` in the CDK stack — **this and the
+code must deploy together** or the live lambda throws AccessDenied on every
+takeout order. Post-deploy, sanity-check one real order: the charged amount is
+now the server value from the menu table.
 
-### 2. No order-id idempotency — `ingress/checkout_api.py`
+### 2. No order-id idempotency — `ingress/checkout_api.py` — FIXED IN CODE, PENDING DEPLOY
 
-`table.put_item(Item=order_item)` with no condition — a repeated/duplicate
-`orderId` silently overwrites an existing order.
+`table.put_item(Item=order_item)` had no condition — a repeated/duplicate
+`orderId` silently overwrote an existing order.
 
-**Fix (exists, undeployed):** the mirror uses
-`put_item(..., ConditionExpression='attribute_not_exists(orderId)')` and returns
-409 on collision.
+**Fix (applied):** `put_item(..., ConditionExpression='attribute_not_exists(orderId)')`,
+returning 409 on collision. No IAM change (still `PutItem`).
 
 ### 3. Unauthenticated IDOR / notification abuse — `ingress/order_confirmation_api.py`
 
@@ -52,12 +58,14 @@ vector *and* a PII-overwrite vector.
 **email path and the contact-field overwrite remain open**, and SMS re-opens the
 moment that flag flips.
 
-**Fix (needs new work — not in the mirror):** require a signed one-time token
-bound to the specific `orderId` issued at checkout, or verify the Stripe
-PaymentIntent id + client_secret against Stripe before allowing any
-lookup/update/send. Only send to the contact captured at checkout (or require a
-match). Add per-IP and per-orderId rate limits, and refuse to overwrite
-already-set contact fields.
+**Fix (chosen approach — HMAC token, not yet implemented):** `checkout_api`
+mints a signed token bound to the `orderId` (HMAC over the id with a shared
+secret) and returns it; the frontend caches it with the recap and sends it back;
+`order_confirmation_api` recomputes the HMAC and rejects a mismatch. Stdlib-only
+(`hmac`), no Stripe SDK or new AWS service on that lambda; needs one shared
+secret. Also: only send to the contact captured at checkout (or require a match),
+refuse to overwrite already-set contact fields, and add per-IP / per-orderId rate
+limits. Spans the frontend (TableTap2.0) too, so tracked as its own piece.
 
 ## Secondary hygiene (lower priority, also mirror-vs-deployed drift)
 

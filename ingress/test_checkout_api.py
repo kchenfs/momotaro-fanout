@@ -71,9 +71,17 @@ def _real_order_body(**overrides):
     return body
 
 
-def _patch_stripe_and_table(monkeypatch):
+# Item id "1" priced at $20.00 → subtotal 20.00 * 1.13 tax = $22.60 = 2260 cents.
+_FAKE_MENU_ITEMS = [{"ItemNumber": 1, "Price": "20.00", "Options": []}]
+
+
+def _patch_stripe_and_table(monkeypatch, menu_items=None):
     fake_table = MagicMock()
     monkeypatch.setattr(api, "table", fake_table)
+
+    fake_menu = MagicMock()
+    fake_menu.scan.return_value = {"Items": _FAKE_MENU_ITEMS if menu_items is None else menu_items}
+    monkeypatch.setattr(api, "menu_table", fake_menu)
 
     fake_intent = MagicMock()
     fake_intent.client_secret = "cs_test_123"
@@ -134,3 +142,65 @@ def test_order_without_name_still_succeeds(monkeypatch):
     assert body["orderId"] == "TKOT-ABCDE"
     assert fake_table.put_item.called
     assert fake_create.called
+
+
+# ---------------------------------------------------------------------------
+# #1 price manipulation — the charged amount is recomputed server-side
+# ---------------------------------------------------------------------------
+
+def test_amount_recomputed_and_client_amount_ignored(monkeypatch):
+    from decimal import Decimal
+    fake_table, fake_create = _patch_stripe_and_table(monkeypatch)
+
+    # Client tries to pay 1 cent for a $22.60 order.
+    resp = api.handler(_event(_real_order_body(amount=1)), None)
+
+    assert resp["statusCode"] == 200
+    # The confirmed intent is charged the server-computed amount, not the client's.
+    assert fake_create.call_args.kwargs["amount"] == 2260
+    stored = fake_table.put_item.call_args.kwargs["Item"]
+    assert stored["total"] == Decimal("22.6")
+
+
+def test_unknown_item_returns_400(monkeypatch):
+    fake_table, fake_create = _patch_stripe_and_table(monkeypatch)
+
+    resp = api.handler(_event(_real_order_body(items=[{"id": "999", "quantity": 1}])), None)
+
+    assert resp["statusCode"] == 400
+    assert not fake_table.put_item.called
+    assert not fake_create.called
+
+
+def test_too_many_items_returns_400(monkeypatch):
+    fake_table, fake_create = _patch_stripe_and_table(monkeypatch)
+
+    resp = api.handler(_event(_real_order_body(
+        items=[{"id": "1", "quantity": 1} for _ in range(21)])), None)
+
+    assert resp["statusCode"] == 400
+    assert not fake_table.put_item.called
+
+
+# ---------------------------------------------------------------------------
+# #2 idempotency — a duplicate orderId is rejected, not silently overwritten
+# ---------------------------------------------------------------------------
+
+def test_duplicate_order_id_returns_409(monkeypatch):
+    fake_table, fake_create = _patch_stripe_and_table(monkeypatch)
+    fake_table.put_item.side_effect = api.ClientError(
+        {"Error": {"Code": "ConditionalCheckFailedException"}}, "PutItem")
+
+    resp = api.handler(_event(_real_order_body()), None)
+
+    assert resp["statusCode"] == 409
+    # No payment intent is confirmed for a duplicate order.
+    assert not fake_create.called
+
+
+def test_put_item_uses_idempotency_condition(monkeypatch):
+    fake_table, _ = _patch_stripe_and_table(monkeypatch)
+
+    api.handler(_event(_real_order_body()), None)
+
+    assert fake_table.put_item.call_args.kwargs["ConditionExpression"] == "attribute_not_exists(orderId)"

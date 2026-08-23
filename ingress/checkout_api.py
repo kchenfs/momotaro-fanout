@@ -6,11 +6,16 @@ import stripe
 import traceback
 from datetime import datetime
 from zoneinfo import ZoneInfo
-from decimal import Decimal
+from decimal import Decimal, ROUND_HALF_UP
+from botocore.exceptions import ClientError
 
 stripe.api_key = os.environ.get('STRIPE_CHECKOUT_API_KEY')
 dynamodb = boto3.resource('dynamodb')
 table = dynamodb.Table(os.environ.get('DYNAMODB_TABLE_NAME'))
+menu_table = dynamodb.Table('MomotaroSushiMenu_DB')
+
+TAX_RATE = Decimal('0.13')
+MAX_ITEMS = 20
 
 # Non-whitespace control characters to strip from client-supplied text.
 # Whitespace (\t\n\r etc.) is handled by str.split() below, so it is not
@@ -37,6 +42,68 @@ def sanitize_customer_name(raw):
 def float_to_decimal(payload):
     return json.loads(json.dumps(payload), parse_float=Decimal)
 
+def _menu_lookup_by_item_number():
+    """MomotaroSushiMenu_DB's key is ItemName, not ItemNumber, so we scan
+    once and index by ItemNumber (the id the frontend actually sends)."""
+    lookup = {}
+    scan_kwargs = {}
+    while True:
+        resp = menu_table.scan(**scan_kwargs)
+        for menu_item in resp.get('Items', []):
+            item_number = menu_item.get('ItemNumber')
+            if item_number is not None:
+                lookup[str(item_number)] = menu_item
+        if 'LastEvaluatedKey' not in resp:
+            break
+        scan_kwargs['ExclusiveStartKey'] = resp['LastEvaluatedKey']
+    return lookup
+
+def _compute_order_total_cents(items):
+    """Recompute the order total from the canonical menu/options prices
+    instead of trusting the client-supplied amount."""
+    if not items:
+        raise ValueError("No items in order")
+    if len(items) > MAX_ITEMS:
+        raise ValueError(f"Too many items (max {MAX_ITEMS})")
+
+    menu_lookup = _menu_lookup_by_item_number()
+    subtotal = Decimal('0')
+
+    for line in items:
+        menu_item = menu_lookup.get(str(line.get('id')))
+        if not menu_item:
+            raise ValueError(f"Unknown menu item id: {line.get('id')}")
+
+        quantity = int(line.get('quantity', 1))
+        if quantity < 1 or quantity > 50:
+            raise ValueError("Invalid quantity")
+
+        line_price = Decimal(str(menu_item.get('Price', '0')))
+
+        # Options arrive as "Group: OptionName; Group2: OptionName2" —
+        # match each selection back against the canonical menu item so
+        # the priceModifier always comes from our own data, never the client.
+        selected = {}
+        for part in (line.get('options') or '').split(';'):
+            part = part.strip()
+            if ':' in part:
+                group_name, option_name = part.split(':', 1)
+                selected[group_name.strip()] = option_name.strip()
+
+        for group in menu_item.get('Options', []):
+            chosen_name = selected.get(group.get('name'))
+            if not chosen_name:
+                continue
+            for opt in group.get('items', []):
+                if opt.get('name') == chosen_name:
+                    line_price += Decimal(str(opt.get('priceModifier', 0)))
+                    break
+
+        subtotal += line_price * quantity
+
+    total_with_tax = subtotal * (1 + TAX_RATE)
+    return int((total_with_tax * 100).to_integral_value(rounding=ROUND_HALF_UP))
+
 def handler(event, context):
     print(f"Received event: {json.dumps(event)}")
 
@@ -57,14 +124,16 @@ def handler(event, context):
             return {'statusCode': 400, 'body': json.dumps({'error': 'Empty body'})}
             
         body = json.loads(body_raw)
-        amount = int(body.get('amount', 0))
-        
+
         # --- THE GHOST ORDER FIX ---
         metadata = body.get('metadata')
-        
-        # 1. If no metadata, it's just React warming up the UI. 
+
+        # 1. If no metadata, it's just React warming up the UI.
         # Generate a Stripe Intent to render the modal, but DO NOT write to the DB.
+        # This intent is never the one actually confirmed for payment (see step 4),
+        # so a client-supplied amount here has no fraud/order impact.
         if not metadata:
+            amount = int(body.get('amount', 0))
             intent = stripe.PaymentIntent.create(
                 amount=amount,
                 currency='cad',
@@ -85,7 +154,15 @@ def handler(event, context):
         customer_email = body.get('customerDetails', {}).get('email')
         customer_name = sanitize_customer_name(body.get('customerName'))
 
-        # 3. Write the confirmed order to DynamoDB
+        # Recompute the amount from canonical menu prices — never trust the
+        # client-supplied amount for the intent that actually gets charged.
+        try:
+            amount = _compute_order_total_cents(items)
+        except ValueError:
+            return {'statusCode': 400, 'headers': { 'Access-Control-Allow-Origin': '*' }, 'body': json.dumps({'error': 'Invalid order items'})}
+
+        # 3. Write the confirmed order to DynamoDB — reject if this orderId
+        # already exists instead of silently overwriting someone else's order.
         eastern_time = datetime.now(ZoneInfo("America/Toronto"))
         order_payload = {
             'orderId': order_id,
@@ -104,7 +181,12 @@ def handler(event, context):
             order_payload['customerName'] = customer_name
         order_item = float_to_decimal(order_payload)
 
-        table.put_item(Item=order_item)
+        try:
+            table.put_item(Item=order_item, ConditionExpression='attribute_not_exists(orderId)')
+        except ClientError as e:
+            if e.response['Error']['Code'] == 'ConditionalCheckFailedException':
+                return {'statusCode': 409, 'headers': { 'Access-Control-Allow-Origin': '*' }, 'body': json.dumps({'error': 'Order already exists'})}
+            raise
 
         # 4. Create the final Stripe Intent linked to our DB record
         # receipt_email: Stripe sends its own receipt email directly (not through
