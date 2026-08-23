@@ -75,6 +75,12 @@ fails closed). Shared logic lives in `ingress/confirmation_token.py` (stdlib
 `hmac` only). Defense-in-depth added: the endpoint **refuses to overwrite** a
 `phoneNumber`/`receiptEmail` already on the order with a different value.
 
+**Consequence handled:** the chatbot's `/order-complete` page (TableTap2.0)
+shared this endpoint's SMS/email opt-in but has no token (its order flows through
+the unauthenticated status endpoint). Rather than show a form that would now 403,
+that opt-in was removed there (`showContactOptIn={false}`); the order recap still
+renders. The web `/completion` opt-in keeps working with its token.
+
 **Still open (deferred):** per-IP / per-orderId **rate limiting** — belongs at
 API Gateway (usage plan / throttling), an infra task, not app code.
 
