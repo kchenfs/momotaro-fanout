@@ -8,6 +8,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 from decimal import Decimal, ROUND_HALF_UP
 from botocore.exceptions import ClientError
+from confirmation_token import make_confirmation_token
 
 stripe.api_key = os.environ.get('STRIPE_CHECKOUT_API_KEY')
 dynamodb = boto3.resource('dynamodb')
@@ -208,13 +209,19 @@ def handler(event, context):
             receipt_email=customer_email
         )
 
+        # Token proves this caller went through checkout, so the confirmation
+        # endpoint can trust a later SMS/email request for this order id.
         return {
             'statusCode': 200,
             'headers': {
                 'Access-Control-Allow-Origin': '*',
                 'Content-Type': 'application/json'
             },
-            'body': json.dumps({'clientSecret': intent.client_secret, 'orderId': order_id})
+            'body': json.dumps({
+                'clientSecret': intent.client_secret,
+                'orderId': order_id,
+                'confirmationToken': make_confirmation_token(order_id),
+            })
         }
 
     except Exception as e:

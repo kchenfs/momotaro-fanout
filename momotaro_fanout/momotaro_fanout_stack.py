@@ -31,6 +31,9 @@ class MomotaroFanoutStack(Stack):
         STRIPE_SECRET_KEY = os.getenv("STRIPE_SECRET_KEY")
         STRIPE_WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET")
         STRIPE_CHECKOUT_API_KEY = os.getenv("STRIPE_CHECKOUT_API_KEY")
+        # Shared HMAC secret: checkout_api mints a confirmation token, the
+        # order-confirmation API verifies it. Both lambdas must get the same value.
+        CONFIRMATION_TOKEN_SECRET = os.getenv("CONFIRMATION_TOKEN_SECRET", "")
         TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
         PRINT_STATUS_TOPIC = os.getenv("PRINT_STATUS_TOPIC", "kitchen/print/status")
         # Alarm when month-to-date SMS spend reaches this. Must be raised in step
@@ -356,7 +359,8 @@ class MomotaroFanoutStack(Stack):
             environment={
                 **otel_env_vars,
                 "STRIPE_CHECKOUT_API_KEY": STRIPE_CHECKOUT_API_KEY,
-                "DYNAMODB_TABLE_NAME": DYNAMODB_TABLE_NAME 
+                "DYNAMODB_TABLE_NAME": DYNAMODB_TABLE_NAME,
+                "CONFIRMATION_TOKEN_SECRET": CONFIRMATION_TOKEN_SECRET
             }
         )
         attach_adot_policy(checkout_api)
@@ -387,6 +391,8 @@ class MomotaroFanoutStack(Stack):
                 # Off until the SNS SMS Sandbox restriction clears - see
                 # order_confirmation_api.py for why every real send fails today.
                 "SMS_NOTIFICATIONS_ENABLED": "false",
+                # Same secret as checkout_api — used to verify the confirmation token.
+                "CONFIRMATION_TOKEN_SECRET": CONFIRMATION_TOKEN_SECRET,
             }
         )
         attach_adot_policy(order_confirmation_api)

@@ -1,10 +1,18 @@
 # Security hardening backlog — deployed checkout/notification lambdas
 
-**Status:** partially addressed. #1 and #2 are **fixed in code (authoritative
-`ingress/checkout_api.py` + a CDK `dynamodb:Scan` grant), pending `cdk deploy`.**
-#3 is still open (approach chosen: HMAC token — see below). Secondary hygiene
-items remain open. Tracked separately from the takeout pickup-name feature so it
-does not ride behind it.
+**Status:** #1, #2, and #3 are all **fixed in code, pending deploy.** #1/#2 in
+`ingress/checkout_api.py` (+ a CDK `dynamodb:Scan` grant); #3 via an HMAC
+confirmation token across `checkout_api`, `order_confirmation_api`, the CDK
+stack, and the TableTap2.0 frontend. Secondary hygiene items remain open.
+Tracked separately from the takeout pickup-name feature so it does not ride
+behind it.
+
+**Deploy requirements:** set `CONFIRMATION_TOKEN_SECRET` in the fanout `.env`
+(a generated value is already there locally) — it is passed to both lambdas.
+Deploy the fanout stack and the frontend close together: once
+`order_confirmation_api` requires the token it fails closed, so the frontend
+must be sending it. The only cost during any gap is that the *optional* SMS/email
+receipt fails — no order or payment impact.
 
 **Discovered:** 2026-08-22, while diffing the deployed lambdas against the
 `TableTap2.0/lambda/*.py` mirrors for the pickup-name work. Independently
@@ -45,7 +53,7 @@ now the server value from the menu table.
 **Fix (applied):** `put_item(..., ConditionExpression='attribute_not_exists(orderId)')`,
 returning 409 on collision. No IAM change (still `PutItem`).
 
-### 3. Unauthenticated IDOR / notification abuse — `ingress/order_confirmation_api.py`
+### 3. Unauthenticated IDOR / notification abuse — `ingress/order_confirmation_api.py` — FIXED IN CODE, PENDING DEPLOY
 
 The endpoint takes `orderId` from the request body, looks up the order, and will
 **overwrite** `phoneNumber` / `receiptEmail` on the record and fire an SNS SMS /
@@ -58,14 +66,17 @@ vector *and* a PII-overwrite vector.
 **email path and the contact-field overwrite remain open**, and SMS re-opens the
 moment that flag flips.
 
-**Fix (chosen approach — HMAC token, not yet implemented):** `checkout_api`
-mints a signed token bound to the `orderId` (HMAC over the id with a shared
-secret) and returns it; the frontend caches it with the recap and sends it back;
-`order_confirmation_api` recomputes the HMAC and rejects a mismatch. Stdlib-only
-(`hmac`), no Stripe SDK or new AWS service on that lambda; needs one shared
-secret. Also: only send to the contact captured at checkout (or require a match),
-refuse to overwrite already-set contact fields, and add per-IP / per-orderId rate
-limits. Spans the frontend (TableTap2.0) too, so tracked as its own piece.
+**Fix (applied — HMAC token):** `checkout_api` mints a token bound to the
+`orderId` (`HMAC-SHA256(CONFIRMATION_TOKEN_SECRET, order_id)`) and returns it;
+the frontend caches it with the recap through the Stripe redirect and sends it
+back; `order_confirmation_api` recomputes the HMAC and rejects a missing/invalid
+token with **403 before any lookup, update, or send** (constant-time compare,
+fails closed). Shared logic lives in `ingress/confirmation_token.py` (stdlib
+`hmac` only). Defense-in-depth added: the endpoint **refuses to overwrite** a
+`phoneNumber`/`receiptEmail` already on the order with a different value.
+
+**Still open (deferred):** per-IP / per-orderId **rate limiting** — belongs at
+API Gateway (usage plan / throttling), an infra task, not app code.
 
 ## Secondary hygiene (lower priority, also mirror-vs-deployed drift)
 

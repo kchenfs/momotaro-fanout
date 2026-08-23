@@ -6,6 +6,7 @@ from unittest.mock import MagicMock
 # guard a missing name, so give it a dummy one before import. Every test
 # monkeypatches api.table anyway, so this value is never actually used.
 os.environ.setdefault("DYNAMODB_TABLE_NAME", "test-table")
+os.environ.setdefault("CONFIRMATION_TOKEN_SECRET", "test-secret")
 
 import checkout_api as api
 
@@ -204,3 +205,18 @@ def test_put_item_uses_idempotency_condition(monkeypatch):
     api.handler(_event(_real_order_body()), None)
 
     assert fake_table.put_item.call_args.kwargs["ConditionExpression"] == "attribute_not_exists(orderId)"
+
+
+# ---------------------------------------------------------------------------
+# #3 confirmation token — checkout mints a token bound to the order id
+# ---------------------------------------------------------------------------
+
+def test_confirmation_token_returned_and_valid(monkeypatch):
+    from confirmation_token import make_confirmation_token
+    _patch_stripe_and_table(monkeypatch)
+
+    resp = api.handler(_event(_real_order_body()), None)
+    body = json.loads(resp["body"])
+
+    assert body["confirmationToken"]  # non-empty
+    assert body["confirmationToken"] == make_confirmation_token(body["orderId"])

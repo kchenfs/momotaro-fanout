@@ -3,6 +3,7 @@ import os
 import re
 import boto3
 from email_receipt import send_receipt_email
+from confirmation_token import verify_confirmation_token
 
 sns_client = boto3.client('sns')
 dynamodb = boto3.resource('dynamodb')
@@ -65,6 +66,12 @@ def handler(event, context):
     if not raw_phone and not raw_email:
         return _resp(200, {'success': True, 'smsSent': False, 'emailSent': False})
 
+    # Any request that will send/store contact info must prove it came from the
+    # customer who checked out this order — otherwise anyone who guesses an
+    # order id can trigger SMS/email or overwrite the contact on file.
+    if not verify_confirmation_token(order_id, body.get('token')):
+        return _resp(403, {'error': 'Invalid or missing confirmation token'})
+
     if table is None:
         return _resp(500, {'error': 'Server misconfigured'})
 
@@ -80,8 +87,13 @@ def handler(event, context):
         print(f"SMS skipped for {order_id}: SMS_NOTIFICATIONS_ENABLED is off")
     elif raw_phone:
         phone_e164 = _normalize_phone(raw_phone)
+        existing_phone = order.get('phoneNumber')
         if not phone_e164:
             errors.append('Invalid phone number')
+        elif existing_phone and existing_phone != phone_e164:
+            # A different number is already on file — never let a later request
+            # silently reassign where this order's texts go.
+            errors.append('A contact is already on file for this order')
         else:
             try:
                 table.update_item(
@@ -108,8 +120,11 @@ def handler(event, context):
                 errors.append('SMS failed to send')
 
     if raw_email:
+        existing_email = order.get('receiptEmail')
         if not _EMAIL_RE.match(raw_email):
             errors.append('Invalid email address')
+        elif existing_email and existing_email != raw_email:
+            errors.append('A contact is already on file for this order')
         else:
             try:
                 table.update_item(
