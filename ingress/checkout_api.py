@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import boto3
 import stripe
 import traceback
@@ -10,6 +11,28 @@ from decimal import Decimal
 stripe.api_key = os.environ.get('STRIPE_CHECKOUT_API_KEY')
 dynamodb = boto3.resource('dynamodb')
 table = dynamodb.Table(os.environ.get('DYNAMODB_TABLE_NAME'))
+
+# Non-whitespace control characters to strip from client-supplied text.
+# Whitespace (\t\n\r etc.) is handled by str.split() below, so it is not
+# listed here — that lets "a\nb" collapse to "a b" instead of "ab".
+_CONTROL_CHARS_RE = re.compile(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]')
+
+def sanitize_customer_name(raw):
+    """Normalize a client-supplied pickup name for storage and printing.
+
+    Collapses whitespace, strips control characters, truncates to 40 chars.
+    Returns None for anything empty or unusable — never '' — so an absent
+    name lets the Stripe billing-name fallback fire downstream. Must never
+    raise: a bad name may not block a paid order.
+    """
+    if raw is None:
+        return None
+    try:
+        text = ' '.join(str(raw).split())          # collapse whitespace + trim
+        text = _CONTROL_CHARS_RE.sub('', text)      # drop leftover control chars
+        return text[:40] or None
+    except Exception:
+        return None
 
 def float_to_decimal(payload):
     return json.loads(json.dumps(payload), parse_float=Decimal)
@@ -60,21 +83,27 @@ def handler(event, context):
         items = body.get('items', [])
         notes = body.get('notes', '')
         customer_email = body.get('customerDetails', {}).get('email')
+        customer_name = sanitize_customer_name(body.get('customerName'))
 
         # 3. Write the confirmed order to DynamoDB
         eastern_time = datetime.now(ZoneInfo("America/Toronto"))
-        order_item = float_to_decimal({
+        order_payload = {
             'orderId': order_id,
             'orderType': 'takeout',
-            'orderStatus': 'PENDING_PAYMENT', 
+            'orderStatus': 'PENDING_PAYMENT',
             'paymentStatus': 'UNPAID',
             'items': items,
             'notes': notes,
             'total': amount / 100,
             'orderDate': eastern_time.isoformat(),
             'receiptEmail': customer_email
-        })
-        
+        }
+        # Absent means "not collected" — only store the attribute when we
+        # actually have a name, never an empty string.
+        if customer_name is not None:
+            order_payload['customerName'] = customer_name
+        order_item = float_to_decimal(order_payload)
+
         table.put_item(Item=order_item)
 
         # 4. Create the final Stripe Intent linked to our DB record
@@ -82,11 +111,17 @@ def handler(event, context):
         # our SES setup) once the payment succeeds. In live mode this is sent
         # regardless of Dashboard email settings, so it works today without
         # waiting on SES production access.
+        # Mirror the name into the intent metadata so it's visible in the
+        # Stripe dashboard when reconciling or refunding.
+        intent_metadata = {'order_id': order_id}
+        if customer_name is not None:
+            intent_metadata['customer_name'] = customer_name
+
         intent = stripe.PaymentIntent.create(
             amount=amount,
             currency='cad',
             payment_method_types=['card'],
-            metadata={'order_id': order_id},
+            metadata=intent_metadata,
             description=f"Momotaro Sushi Takeout — Order {order_id}",
             receipt_email=customer_email
         )
