@@ -8,3 +8,7 @@ __pycache__/
 .pytest_cache/
 cdk.out/
 .venv/
+
+# Vendored Lambda layer dependencies (stripe, requests, certifi, etc.) —
+# rebuilt from requirements.txt, not hand-written source.
+momotaro_layer/python/
