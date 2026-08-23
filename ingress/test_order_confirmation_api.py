@@ -48,12 +48,33 @@ def test_no_contact_info_is_a_no_op(monkeypatch):
     assert not fake_table.get_item.called  # no order lookup needed if nothing to send
 
 
+def test_phone_skipped_when_sms_disabled(monkeypatch):
+    """SMS_NOTIFICATIONS_ENABLED defaults to off (SNS SMS Sandbox rejects every
+    real customer number), so a phone should be a silent no-op, not an error."""
+    fake_table = MagicMock()
+    fake_table.get_item.return_value = {"Item": _order_item()}
+    monkeypatch.setattr(api, "table", fake_table)
+    fake_sns = MagicMock()
+    monkeypatch.setattr(api, "sns_client", fake_sns)
+    assert api.SMS_NOTIFICATIONS_ENABLED is False  # the actual default, not just this test's setup
+
+    resp = api.handler(_event({"orderId": "TKOT-ABCDE", "phone": "416-555-1234"}), None)
+    body = json.loads(resp["body"])
+
+    assert resp["statusCode"] == 200
+    assert body["smsSent"] is False
+    assert body["errors"] == []
+    assert not fake_sns.publish.called
+    assert not fake_table.update_item.called
+
+
 def test_valid_phone_sends_sms_and_updates_order(monkeypatch):
     fake_table = MagicMock()
     fake_table.get_item.return_value = {"Item": _order_item()}
     monkeypatch.setattr(api, "table", fake_table)
     fake_sns = MagicMock()
     monkeypatch.setattr(api, "sns_client", fake_sns)
+    monkeypatch.setattr(api, "SMS_NOTIFICATIONS_ENABLED", True)
 
     resp = api.handler(_event({"orderId": "TKOT-ABCDE", "phone": "416-555-1234"}), None)
     body = json.loads(resp["body"])
@@ -76,6 +97,7 @@ def test_invalid_phone_reports_error_without_crashing(monkeypatch):
     monkeypatch.setattr(api, "table", fake_table)
     fake_sns = MagicMock()
     monkeypatch.setattr(api, "sns_client", fake_sns)
+    monkeypatch.setattr(api, "SMS_NOTIFICATIONS_ENABLED", True)
 
     resp = api.handler(_event({"orderId": "TKOT-ABCDE", "phone": "123"}), None)
     body = json.loads(resp["body"])
@@ -138,6 +160,7 @@ def test_both_phone_and_email_sends_both(monkeypatch):
     fake_sns = MagicMock()
     monkeypatch.setattr(api, "sns_client", fake_sns)
     monkeypatch.setattr(api, "send_receipt_email", lambda order, email, sender: "msg-1")
+    monkeypatch.setattr(api, "SMS_NOTIFICATIONS_ENABLED", True)
 
     resp = api.handler(_event({
         "orderId": "TKOT-ABCDE", "phone": "4165551234", "email": "customer@example.com",

@@ -63,10 +63,16 @@ class MomotaroFanoutStack(Stack):
             "OTEL_PYTHON_DISABLED_INSTRUMENTATIONS": "none",         # Enable all auto-instrumentation
         }
 
+        # __pycache__/.pytest_cache regenerate with new content on every local
+        # test run, so without this exclude the asset hash (and therefore the
+        # "needs redeploy" diff) drifts on every `cdk diff`/`cdk deploy` even
+        # when no source file actually changed.
+        ASSET_EXCLUDES = ["__pycache__", "*.pyc", ".pytest_cache"]
+
         # Shared branded-receipt email composition + SES send logic, used by
         # ReceiptEmailSender (SNS-triggered) and OrderConfirmationApi (below).
         email_receipt_layer = _lambda.LayerVersion(self, "EmailReceiptLayer",
-            code=_lambda.Code.from_asset("email_lib"),
+            code=_lambda.Code.from_asset("email_lib", exclude=ASSET_EXCLUDES),
             compatible_runtimes=[_lambda.Runtime.PYTHON_3_12],
             description="Shared branded-receipt email composition + SES send logic"
         )
@@ -91,7 +97,7 @@ class MomotaroFanoutStack(Stack):
         dine_in_order_writer = _lambda.Function(self, "DineInOrderWriter",
             runtime=_lambda.Runtime.PYTHON_3_12,
             handler="dine_in_order_writer.handler",
-            code=_lambda.Code.from_asset("workers"),
+            code=_lambda.Code.from_asset("workers", exclude=ASSET_EXCLUDES),
             layers=[adot_layer],
             environment={
                 **otel_env_vars,
@@ -116,7 +122,7 @@ class MomotaroFanoutStack(Stack):
         takeout_payment_updater = _lambda.Function(self, "TakeoutPaymentUpdater",
             runtime=_lambda.Runtime.PYTHON_3_12,
             handler="takeout_payment_updater.handler",
-            code=_lambda.Code.from_asset("workers"),
+            code=_lambda.Code.from_asset("workers", exclude=ASSET_EXCLUDES),
             layers=[adot_layer],
             environment={
                 **otel_env_vars,
@@ -141,7 +147,7 @@ class MomotaroFanoutStack(Stack):
         kitchen_display_publisher = _lambda.Function(self, "KitchenDisplayPublisher",
             runtime=_lambda.Runtime.PYTHON_3_12,
             handler="kitchen_display_publisher.handler",
-            code=_lambda.Code.from_asset("workers"),
+            code=_lambda.Code.from_asset("workers", exclude=ASSET_EXCLUDES),
             layers=[adot_layer],
             timeout=Duration.seconds(20),
             environment={
@@ -160,7 +166,7 @@ class MomotaroFanoutStack(Stack):
         receipt_email_sender = _lambda.Function(self, "ReceiptEmailSender",
             runtime=_lambda.Runtime.PYTHON_3_12,
             handler="receipt_email_sender.handler",
-            code=_lambda.Code.from_asset("workers"),
+            code=_lambda.Code.from_asset("workers", exclude=ASSET_EXCLUDES),
             layers=[adot_layer, email_receipt_layer],
             environment={
                 **otel_env_vars,
@@ -189,7 +195,7 @@ class MomotaroFanoutStack(Stack):
         print_status_alerter = _lambda.Function(self, "PrintStatusAlerter",
             runtime=_lambda.Runtime.PYTHON_3_12,
             handler="print_status_alerter.handler",
-            code=_lambda.Code.from_asset("workers"),
+            code=_lambda.Code.from_asset("workers", exclude=ASSET_EXCLUDES),
             layers=[adot_layer],
             timeout=Duration.seconds(15),
             environment={
@@ -230,7 +236,7 @@ class MomotaroFanoutStack(Stack):
         ops_alerter = _lambda.Function(self, "OpsAlerter",
             runtime=_lambda.Runtime.PYTHON_3_12,
             handler="ops_alerter.handler",
-            code=_lambda.Code.from_asset("workers"),
+            code=_lambda.Code.from_asset("workers", exclude=ASSET_EXCLUDES),
             layers=[adot_layer],
             timeout=Duration.seconds(15),
             environment={
@@ -297,7 +303,7 @@ class MomotaroFanoutStack(Stack):
         # 5. THE PUBLISHERS (INGRESS APIS)
         # ==========================================
         stripe_layer = _lambda.LayerVersion(self, "StripeLayer",
-            code=_lambda.Code.from_asset("momotaro_layer"),
+            code=_lambda.Code.from_asset("momotaro_layer", exclude=ASSET_EXCLUDES),
             compatible_runtimes=[_lambda.Runtime.PYTHON_3_12],
             description="Contains Stripe and its dependencies"
         )    
@@ -305,7 +311,7 @@ class MomotaroFanoutStack(Stack):
         takeout_ingress = _lambda.Function(self, "TakeoutIngress",
             runtime=_lambda.Runtime.PYTHON_3_12,
             handler="takeout_ingress.handler",
-            code=_lambda.Code.from_asset("ingress"),
+            code=_lambda.Code.from_asset("ingress", exclude=ASSET_EXCLUDES),
             layers=[stripe_layer, adot_layer],
             timeout=Duration.seconds(20),
             environment={
@@ -327,7 +333,7 @@ class MomotaroFanoutStack(Stack):
         dine_in_ingress = _lambda.Function(self, "DineInIngress",
             runtime=_lambda.Runtime.PYTHON_3_12,
             handler="dine_in_ingress.handler",
-            code=_lambda.Code.from_asset("ingress"),
+            code=_lambda.Code.from_asset("ingress", exclude=ASSET_EXCLUDES),
             layers=[adot_layer],
             timeout=Duration.seconds(20),
             memory_size=512,
@@ -343,7 +349,7 @@ class MomotaroFanoutStack(Stack):
         checkout_api = _lambda.Function(self, "CheckoutApi",
             runtime=_lambda.Runtime.PYTHON_3_12,
             handler="checkout_api.handler",
-            code=_lambda.Code.from_asset("ingress"),
+            code=_lambda.Code.from_asset("ingress", exclude=ASSET_EXCLUDES),
             layers=[stripe_layer, adot_layer],
             timeout=Duration.seconds(20),  
             memory_size=512,               
@@ -363,7 +369,7 @@ class MomotaroFanoutStack(Stack):
         order_confirmation_api = _lambda.Function(self, "OrderConfirmationApi",
             runtime=_lambda.Runtime.PYTHON_3_12,
             handler="order_confirmation_api.handler",
-            code=_lambda.Code.from_asset("ingress"),
+            code=_lambda.Code.from_asset("ingress", exclude=ASSET_EXCLUDES),
             layers=[email_receipt_layer, adot_layer],
             timeout=Duration.seconds(15),
             memory_size=256,
@@ -372,6 +378,9 @@ class MomotaroFanoutStack(Stack):
                 "DYNAMODB_TABLE_NAME": DYNAMODB_TABLE_NAME,
                 "SENDER_EMAIL": VERIFIED_SENDER_EMAIL,
                 "ALLOWED_ORIGIN": "*",
+                # Off until the SNS SMS Sandbox restriction clears - see
+                # order_confirmation_api.py for why every real send fails today.
+                "SMS_NOTIFICATIONS_ENABLED": "false",
             }
         )
         attach_adot_policy(order_confirmation_api)

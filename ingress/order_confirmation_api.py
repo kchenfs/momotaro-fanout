@@ -10,6 +10,11 @@ TABLE_NAME = os.environ.get('DYNAMODB_TABLE_NAME')
 table = dynamodb.Table(TABLE_NAME) if TABLE_NAME else None
 SENDER_EMAIL = os.environ.get('SENDER_EMAIL')
 ALLOWED_ORIGIN = os.environ.get('ALLOWED_ORIGIN', '*')
+# SNS SMS is stuck in the account's SMS Sandbox (only a pre-verified test number
+# can receive texts), so every real customer send fails. Off by default until
+# the account clears the sandbox — flip via the Lambda's SMS_NOTIFICATIONS_ENABLED
+# env var, no code change needed to re-enable.
+SMS_NOTIFICATIONS_ENABLED = os.environ.get('SMS_NOTIFICATIONS_ENABLED', 'false').lower() == 'true'
 
 _PHONE_DIGITS_RE = re.compile(r'\D')
 _EMAIL_RE = re.compile(r'^[^@\s]+@[^@\s]+\.[^@\s]+$')
@@ -71,7 +76,9 @@ def handler(event, context):
     email_sent = False
     errors = []
 
-    if raw_phone:
+    if raw_phone and not SMS_NOTIFICATIONS_ENABLED:
+        print(f"SMS skipped for {order_id}: SMS_NOTIFICATIONS_ENABLED is off")
+    elif raw_phone:
         phone_e164 = _normalize_phone(raw_phone)
         if not phone_e164:
             errors.append('Invalid phone number')

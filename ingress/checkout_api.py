@@ -78,11 +78,17 @@ def handler(event, context):
         table.put_item(Item=order_item)
 
         # 4. Create the final Stripe Intent linked to our DB record
+        # receipt_email: Stripe sends its own receipt email directly (not through
+        # our SES setup) once the payment succeeds. In live mode this is sent
+        # regardless of Dashboard email settings, so it works today without
+        # waiting on SES production access.
         intent = stripe.PaymentIntent.create(
             amount=amount,
             currency='cad',
             payment_method_types=['card'],
-            metadata={'order_id': order_id}
+            metadata={'order_id': order_id},
+            description=f"Momotaro Sushi Takeout — Order {order_id}",
+            receipt_email=customer_email
         )
 
         return {
