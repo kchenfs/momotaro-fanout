@@ -17,6 +17,10 @@ menu_table = dynamodb.Table('MomotaroSushiMenu_DB')
 
 TAX_RATE = Decimal('0.13')
 MAX_ITEMS = 20
+# Restrict browser callers to the storefront origin instead of '*'. The real
+# checkout path reaches this lambda server-side via the Next.js proxy (no CORS
+# involved), so this only tightens direct-from-browser calls.
+ALLOWED_ORIGIN = os.environ.get('ALLOWED_ORIGIN', 'https://take-out.momotarosushi.ca')
 
 # Non-whitespace control characters to strip from client-supplied text.
 # Whitespace (\t\n\r etc.) is handled by str.split() below, so it is not
@@ -112,7 +116,7 @@ def handler(event, context):
         return {
             'statusCode': 200,
             'headers': {
-                'Access-Control-Allow-Origin': '*',
+                'Access-Control-Allow-Origin': ALLOWED_ORIGIN,
                 'Access-Control-Allow-Methods': 'POST,OPTIONS',
                 'Access-Control-Allow-Headers': 'Content-Type,Authorization'
             },
@@ -142,7 +146,7 @@ def handler(event, context):
             )
             return {
                 'statusCode': 200,
-                'headers': { 'Access-Control-Allow-Origin': '*', 'Content-Type': 'application/json' },
+                'headers': { 'Access-Control-Allow-Origin': ALLOWED_ORIGIN, 'Content-Type': 'application/json' },
                 'body': json.dumps({'clientSecret': intent.client_secret})
             }
 
@@ -160,7 +164,7 @@ def handler(event, context):
         try:
             amount = _compute_order_total_cents(items)
         except ValueError:
-            return {'statusCode': 400, 'headers': { 'Access-Control-Allow-Origin': '*' }, 'body': json.dumps({'error': 'Invalid order items'})}
+            return {'statusCode': 400, 'headers': { 'Access-Control-Allow-Origin': ALLOWED_ORIGIN }, 'body': json.dumps({'error': 'Invalid order items'})}
 
         # 3. Write the confirmed order to DynamoDB — reject if this orderId
         # already exists instead of silently overwriting someone else's order.
@@ -186,7 +190,7 @@ def handler(event, context):
             table.put_item(Item=order_item, ConditionExpression='attribute_not_exists(orderId)')
         except ClientError as e:
             if e.response['Error']['Code'] == 'ConditionalCheckFailedException':
-                return {'statusCode': 409, 'headers': { 'Access-Control-Allow-Origin': '*' }, 'body': json.dumps({'error': 'Order already exists'})}
+                return {'statusCode': 409, 'headers': { 'Access-Control-Allow-Origin': ALLOWED_ORIGIN }, 'body': json.dumps({'error': 'Order already exists'})}
             raise
 
         # 4. Create the final Stripe Intent linked to our DB record
@@ -214,7 +218,7 @@ def handler(event, context):
         return {
             'statusCode': 200,
             'headers': {
-                'Access-Control-Allow-Origin': '*',
+                'Access-Control-Allow-Origin': ALLOWED_ORIGIN,
                 'Content-Type': 'application/json'
             },
             'body': json.dumps({
@@ -227,4 +231,4 @@ def handler(event, context):
     except Exception as e:
         print("!!! CHECKOUT API ERROR !!!")
         print(traceback.format_exc()) 
-        return {'statusCode': 500, 'headers': { 'Access-Control-Allow-Origin': '*' }, 'body': json.dumps({'error': str(e)})}
+        return {'statusCode': 500, 'headers': { 'Access-Control-Allow-Origin': ALLOWED_ORIGIN }, 'body': json.dumps({'error': 'Internal server error'})}

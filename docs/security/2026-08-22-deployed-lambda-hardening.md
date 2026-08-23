@@ -80,14 +80,19 @@ API Gateway (usage plan / throttling), an infra task, not app code.
 
 ## Secondary hygiene (lower priority, also mirror-vs-deployed drift)
 
-- Deployed CORS is `Access-Control-Allow-Origin: *`; mirror locks it to the
-  storefront origin.
-- Deployed 500 handler leaks `str(e)` in the response body; mirror returns a
-  generic message.
-- Deployed loads Stripe secrets from Lambda **env vars**; mirror reads them from
-  SSM Parameter Store (decrypted). Related: live Stripe keys were previously
-  committed to this repo's `.env` history — history has since been scrubbed, but
-  the keys should still be rotated.
+- **FIXED IN CODE, PENDING DEPLOY** — CORS: both `checkout_api` and
+  `order_confirmation_api` now use an `ALLOWED_ORIGIN` env var (default
+  `https://take-out.momotarosushi.ca`) instead of `*`. `checkout_api`'s real
+  path is server-side via the Next.js proxy, so this only tightens direct
+  browser calls; `order_confirmation_api` is browser-facing, so its origin must
+  match the storefront — override `ALLOWED_ORIGIN` in `.env` if the domain differs.
+- **FIXED IN CODE, PENDING DEPLOY** — `checkout_api`'s 500 handler no longer
+  leaks `str(e)`; it returns a generic `Internal server error`.
+- **STILL OPEN** — the lambdas load Stripe secrets from env vars; the mirror
+  reads them from SSM Parameter Store (decrypted). Deferred: needs the SSM
+  params + IAM and risks breaking auth if mis-sequenced. Related: live Stripe
+  keys were previously committed to this repo's `.env` history — history has
+  since been scrubbed, but the keys should still be rotated.
 
 ## Out of scope of the pickup-name feature
 

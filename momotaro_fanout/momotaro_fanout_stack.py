@@ -34,6 +34,8 @@ class MomotaroFanoutStack(Stack):
         # Shared HMAC secret: checkout_api mints a confirmation token, the
         # order-confirmation API verifies it. Both lambdas must get the same value.
         CONFIRMATION_TOKEN_SECRET = os.getenv("CONFIRMATION_TOKEN_SECRET", "")
+        # Storefront origin the browser-facing APIs accept, instead of '*'.
+        ALLOWED_ORIGIN = os.getenv("ALLOWED_ORIGIN", "https://take-out.momotarosushi.ca")
         TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
         PRINT_STATUS_TOPIC = os.getenv("PRINT_STATUS_TOPIC", "kitchen/print/status")
         # Alarm when month-to-date SMS spend reaches this. Must be raised in step
@@ -360,7 +362,8 @@ class MomotaroFanoutStack(Stack):
                 **otel_env_vars,
                 "STRIPE_CHECKOUT_API_KEY": STRIPE_CHECKOUT_API_KEY,
                 "DYNAMODB_TABLE_NAME": DYNAMODB_TABLE_NAME,
-                "CONFIRMATION_TOKEN_SECRET": CONFIRMATION_TOKEN_SECRET
+                "CONFIRMATION_TOKEN_SECRET": CONFIRMATION_TOKEN_SECRET,
+                "ALLOWED_ORIGIN": ALLOWED_ORIGIN
             }
         )
         attach_adot_policy(checkout_api)
@@ -387,7 +390,7 @@ class MomotaroFanoutStack(Stack):
                 **otel_env_vars,
                 "DYNAMODB_TABLE_NAME": DYNAMODB_TABLE_NAME,
                 "SENDER_EMAIL": VERIFIED_SENDER_EMAIL,
-                "ALLOWED_ORIGIN": "*",
+                "ALLOWED_ORIGIN": ALLOWED_ORIGIN,
                 # Off until the SNS SMS Sandbox restriction clears - see
                 # order_confirmation_api.py for why every real send fails today.
                 "SMS_NOTIFICATIONS_ENABLED": "false",

@@ -10,7 +10,7 @@ dynamodb = boto3.resource('dynamodb')
 TABLE_NAME = os.environ.get('DYNAMODB_TABLE_NAME')
 table = dynamodb.Table(TABLE_NAME) if TABLE_NAME else None
 SENDER_EMAIL = os.environ.get('SENDER_EMAIL')
-ALLOWED_ORIGIN = os.environ.get('ALLOWED_ORIGIN', '*')
+ALLOWED_ORIGIN = os.environ.get('ALLOWED_ORIGIN', 'https://take-out.momotarosushi.ca')
 # SNS SMS is stuck in the account's SMS Sandbox (only a pre-verified test number
 # can receive texts), so every real customer send fails. Off by default until
 # the account clears the sandbox — flip via the Lambda's SMS_NOTIFICATIONS_ENABLED
