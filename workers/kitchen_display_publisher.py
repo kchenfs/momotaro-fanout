@@ -23,6 +23,7 @@ def handler(event, context):
                 'items': order_data.get('items', []),
                 'total': float(order_data.get('total', 0)),
                 'orderDate': order_data.get('orderDate'),
+                'customerName': order_data.get('customerName'),
             }
 
             # Publish to AWS IoT Core
