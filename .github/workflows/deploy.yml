@@ -44,7 +44,11 @@ jobs:
           pip install -r requirements.txt -r requirements-dev.txt \
                       -r momotaro_layer/requirements.txt boto3
 
+      # boto3 clients are created at import time and need a region, even
+      # though the tests never call AWS.
       - name: Run tests
+        env:
+          AWS_DEFAULT_REGION: ca-central-1
         run: pytest -q ingress workers
 
   deploy:
