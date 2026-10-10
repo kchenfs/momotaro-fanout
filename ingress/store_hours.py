@@ -4,8 +4,9 @@ WEEKLY_HOURS maps a weekday (Monday=0 ... Sunday=6) to a list of
 ("HH:MM", "HH:MM") open/close pairs in Toronto time. A day missing from the
 map, or mapped to [], is closed all day. Two pairs model a lunch/dinner split.
 
-WEEKLY_HOURS = None means "hours not set yet": is_open() is always True, so
-nothing is ever blocked until real hours are filled in here. Mirrored in
+WEEKLY_HOURS = None means "hours not set yet": is_open() is always True.
+Only prod enforces the hours (ENFORCE_STORE_HOURS=1 on CheckoutApi); staging
+stays open around the clock so its order tests pass at any hour. Mirrored in
 TableTap's lib/storeHours.ts, which shows the same hours on the site; keep
 the two in step.
 """
@@ -14,7 +15,8 @@ from zoneinfo import ZoneInfo
 
 TZ = ZoneInfo("America/Toronto")
 
-WEEKLY_HOURS = None
+# Takeout runs 11:50 AM to 10:28 PM every day; last orders 10:13 PM.
+WEEKLY_HOURS = {day: [("11:50", "22:28")] for day in range(7)}
 
 # Stop taking orders this long before closing so the kitchen can finish them.
 LAST_ORDER_MINUTES = 15

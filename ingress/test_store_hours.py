@@ -80,3 +80,12 @@ def test_checkout_ignores_hours_when_not_enforced(monkeypatch):
     res = api.handler({"httpMethod": "POST", "body": ""}, None)
     # Falls through to normal validation instead of the closed response.
     assert res["statusCode"] == 400
+
+
+def test_real_hours_every_day_with_last_orders_at_1013pm():
+    for day in range(7):
+        assert not sh.is_open(at(day, "11:49"))
+        assert sh.is_open(at(day, "11:50"))
+        assert sh.is_open(at(day, "22:12"))
+        assert not sh.is_open(at(day, "22:13"))
+    assert sh.next_opening(at(0, "23:00")) == at(1, "11:50")
