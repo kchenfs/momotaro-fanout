@@ -22,6 +22,7 @@ load_dotenv()
 # Kitchen tickets in staging go to their own MQTT topic. No printer or kitchen
 # display subscribes to it, so a test order can never print in the restaurant.
 STAGING_PRINTER_TOPIC = "staging/printers/orders/print"
+STAGING_STRIPE_PUBLISHABLE_KEY_PARAM = "/momotaro/staging/STRIPE_PUBLISHABLE_KEY"
 
 # GitHub OIDC `sub` claims allowed to assume the staging end-to-end test role.
 # Any branch or PR of these two repos: the role only reads/cleans the staging
@@ -557,9 +558,11 @@ class MomotaroFanoutStack(Stack):
             actions=["cloudformation:DescribeStacks"],
             resources=[self.stack_id],
         ))
+        # The publishable key is what the site's browser tests build with.
         e2e_role.add_to_policy(iam.PolicyStatement(
             actions=["ssm:GetParameter"],
-            resources=[f"arn:aws:ssm:{self.region}:{self.account}:parameter/{stripe_key_param.lstrip('/')}"],
+            resources=[f"arn:aws:ssm:{self.region}:{self.account}:parameter/{name.lstrip('/')}"
+                       for name in (stripe_key_param, STAGING_STRIPE_PUBLISHABLE_KEY_PARAM)],
         ))
         e2e_role.add_to_policy(iam.PolicyStatement(
             actions=["kms:Decrypt"],

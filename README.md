@@ -27,7 +27,10 @@ Staging cannot reach the restaurant or customers:
 1. In the Stripe dashboard, switch to **test mode** and copy the secret key
    (`sk_test_...`). Store it in SSM:
    `aws ssm put-parameter --region ca-central-1 --name /momotaro/staging/STRIPE_SECRET_KEY --type SecureString --value sk_test_...`
-2. That's it for the backend. On its first run the e2e test registers the
+2. Copy the test-mode publishable key (`pk_test_...`) too. The site's browser
+   tests (TableTap2.0) build with it:
+   `aws ssm put-parameter --region ca-central-1 --name /momotaro/staging/STRIPE_PUBLISHABLE_KEY --type String --value pk_test_...`
+3. Nothing else. On its first run the e2e test registers the
    Stripe test-mode webhook for the staging URL and stores its signing secret in
    `/momotaro/staging/STRIPE_WEBHOOK_SECRET`.
 
