@@ -1,0 +1,10 @@
+# Contents of the StripeLayer Lambda layer, pinned to what production ran as of
+# 2026-10-10 (StripeLayer7F3E3AC6:2). The deploy workflow installs these into
+# momotaro_layer/python/ as Linux wheels; that folder is git-ignored.
+stripe==15.0.1
+requests==2.33.1
+urllib3==2.6.3
+certifi==2026.2.25
+idna==3.11
+charset-normalizer==3.4.7
+typing_extensions==4.15.0
