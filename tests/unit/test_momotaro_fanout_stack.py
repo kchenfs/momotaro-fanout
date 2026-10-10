@@ -51,3 +51,14 @@ def test_prod_has_no_staging_resources(monkeypatch):
     rendered = json.dumps(template.to_json())
     assert "momotaro-e2e-staging" not in rendered
     assert STAGING_PRINTER_TOPIC not in rendered
+
+
+def test_takeout_ingress_can_save_the_pickup_name_source():
+    # The Stripe webhook writes customerNameSource back to the order; without
+    # UpdateItem that write is denied and silently skipped.
+    template = _template("staging")
+    policies = template.find_resources("AWS::IAM::Policy")
+    takeout = [p for name, p in policies.items() if name.startswith("TakeoutIngress")]
+    assert takeout, "no TakeoutIngress policy"
+    actions = json.dumps(takeout[0]["Properties"]["PolicyDocument"])
+    assert "dynamodb:UpdateItem" in actions

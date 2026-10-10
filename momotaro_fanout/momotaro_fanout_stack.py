@@ -399,7 +399,9 @@ class MomotaroFanoutStack(Stack):
         order_topic.grant_publish(takeout_ingress)
         takeout_api = apigw.LambdaRestApi(self, "TakeoutApiEndpoint", handler=takeout_ingress)
         takeout_ingress.add_to_role_policy(iam.PolicyStatement(
-            actions=["dynamodb:GetItem"],
+            # UpdateItem: _persist_name_enrichment records where the pickup
+            # name came from after payment (it fails open without it).
+            actions=["dynamodb:GetItem", "dynamodb:UpdateItem"],
             resources=[f"arn:aws:dynamodb:{self.region}:{self.account}:table/{DYNAMODB_TABLE_NAME}"]
         ))
 
