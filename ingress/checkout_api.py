@@ -9,6 +9,7 @@ from zoneinfo import ZoneInfo
 from decimal import Decimal, ROUND_HALF_UP
 from botocore.exceptions import ClientError
 from confirmation_token import make_confirmation_token
+import store_hours
 
 # Stripe key lives in an SSM SecureString param, never in a Lambda env var.
 # Fetched on the first invocation and cached for the container's lifetime.
@@ -34,6 +35,9 @@ MAX_TIP_CENTS = 20000
 # checkout path reaches this lambda server-side via the Next.js proxy (no CORS
 # involved), so this only tightens direct-from-browser calls.
 ALLOWED_ORIGIN = os.environ.get('ALLOWED_ORIGIN', 'https://take-out.momotarosushi.ca')
+# Only prod refuses orders outside opening hours. Staging leaves it off so the
+# pre-deploy order tests can run at any time of day.
+ENFORCE_STORE_HOURS = os.environ.get('ENFORCE_STORE_HOURS') == '1'
 
 # Non-whitespace control characters to strip from client-supplied text.
 # Whitespace (\t\n\r etc.) is handled by str.split() below, so it is not
@@ -148,6 +152,26 @@ def _compute_tip_cents(tip, subtotal_cents):
         return cents
     raise ValueError("Invalid tip")
 
+def _closed_response():
+    """409 telling the customer we're closed and, if known, when we reopen.
+
+    The message goes in 'error' because that is what the site already shows
+    to the customer when checkout fails.
+    """
+    opening = store_hours.next_opening()
+    message = "Sorry, we're closed for online orders right now."
+    if opening is not None:
+        message += f" We open again {opening.strftime('%A at %-I:%M %p')}."
+    return {
+        'statusCode': 409,
+        'headers': { 'Access-Control-Allow-Origin': ALLOWED_ORIGIN, 'Content-Type': 'application/json' },
+        'body': json.dumps({
+            'error': message,
+            'code': 'STORE_CLOSED',
+            'opensAt': opening.isoformat() if opening is not None else None,
+        })
+    }
+
 def handler(event, context):
     print(f"Received event: {json.dumps(event)}")
 
@@ -161,6 +185,11 @@ def handler(event, context):
             },
             'body': ''
         }
+
+    # Checked before anything else, so a closed restaurant never creates a
+    # payment intent or an order row, even from a tab left open since lunch.
+    if ENFORCE_STORE_HOURS and not store_hours.is_open():
+        return _closed_response()
 
     try:
         _load_stripe_key()

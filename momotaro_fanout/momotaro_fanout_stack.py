@@ -433,7 +433,10 @@ class MomotaroFanoutStack(Stack):
                 "STRIPE_KEY_PARAM": STRIPE_CHECKOUT_KEY_PARAM,
                 "DYNAMODB_TABLE_NAME": DYNAMODB_TABLE_NAME,
                 "CONFIRMATION_TOKEN_SECRET": CONFIRMATION_TOKEN_SECRET,
-                "ALLOWED_ORIGIN": ALLOWED_ORIGIN
+                "ALLOWED_ORIGIN": ALLOWED_ORIGIN,
+                # Prod refuses orders outside the hours in ingress/store_hours.py.
+                # Staging takes orders around the clock for the e2e tests.
+                "ENFORCE_STORE_HOURS": "1" if is_prod else "0",
             }
         )
         attach_adot_policy(checkout_api)

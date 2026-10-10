@@ -62,3 +62,20 @@ def test_takeout_ingress_can_save_the_pickup_name_source():
     assert takeout, "no TakeoutIngress policy"
     actions = json.dumps(takeout[0]["Properties"]["PolicyDocument"])
     assert "dynamodb:UpdateItem" in actions
+
+
+def _checkout_env(template):
+    fns = template.find_resources("AWS::Lambda::Function")
+    checkout = [f for name, f in fns.items() if name.startswith("CheckoutApi")]
+    assert checkout, "no CheckoutApi function"
+    return checkout[0]["Properties"]["Environment"]["Variables"]
+
+
+def test_only_prod_enforces_store_hours(monkeypatch):
+    # Staging must take orders at any hour so the pre-deploy tests never
+    # fail just because they ran after closing time.
+    assert _checkout_env(_template("staging"))["ENFORCE_STORE_HOURS"] == "0"
+    for key, value in {"DYNAMODB_TABLE_NAME": "orders", "PRINTER_MQTT_TOPIC": "printers/orders/print",
+                       "VERIFIED_SENDER_EMAIL": "x@example.com", "TELEGRAM_CHAT_ID": "1"}.items():
+        monkeypatch.setenv(key, value)
+    assert _checkout_env(_template("prod"))["ENFORCE_STORE_HOURS"] == "1"
