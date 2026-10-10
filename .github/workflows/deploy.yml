@@ -1,0 +1,102 @@
+# Deploys MomotaroFanoutStack to production on every push to main.
+#
+# AWS access is keyless: GitHub's OIDC token is exchanged for the
+# momotaro-fanout-github-deploy role, which only trusts pushes to main of this
+# repo and can only assume the CDK bootstrap roles and read the stack's .env
+# from SSM. Pull requests run the tests but never get AWS credentials.
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# Never run two deploys at once; queue the newer one instead of cancelling a
+# deploy halfway through.
+concurrency:
+  group: ${{ github.event_name == 'pull_request' && format('test-{0}', github.ref) || 'deploy-prod' }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  AWS_REGION: ca-central-1
+  DEPLOY_ROLE_ARN: arn:aws:iam::798965869505:role/momotaro-fanout-github-deploy
+  # The stack's non-Stripe config (table name, IoT endpoint, sender email,
+  # CONFIRMATION_TOKEN_SECRET, ...) in .env format. Edit it in SSM, not here.
+  DOTENV_PARAM: /momotaro/prod/fanout/DOTENV
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt -r requirements-dev.txt \
+                      -r momotaro_layer/requirements.txt boto3
+
+      # boto3 clients are created at import time and need a region, even
+      # though the tests never call AWS.
+      - name: Run tests
+        env:
+          AWS_DEFAULT_REGION: ca-central-1
+        run: pytest -q ingress workers
+
+  deploy:
+    needs: test
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install CDK app dependencies
+        run: pip install -r requirements.txt
+
+      # Lambda runs Linux x86_64, so fetch manylinux wheels explicitly rather
+      # than whatever matches the runner.
+      - name: Build Stripe layer
+        run: |
+          pip install -r momotaro_layer/requirements.txt \
+            --target momotaro_layer/python \
+            --platform manylinux2014_x86_64 \
+            --implementation cp \
+            --python-version 3.12 \
+            --only-binary=:all:
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      # This repo is public, so mask every value before anything can echo it.
+      - name: Write .env from SSM
+        run: |
+          aws ssm get-parameter --name "$DOTENV_PARAM" --with-decryption \
+            --query Parameter.Value --output text > .env
+          while IFS='=' read -r key value; do
+            [ -n "$value" ] && echo "::add-mask::${value}"
+          done < <(grep -v '^\s*#' .env | grep '=')
+
+      - name: Deploy
+        run: npx --yes aws-cdk@2 deploy MomotaroFanoutStack --require-approval never --progress events

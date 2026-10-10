@@ -56,3 +56,17 @@ command.
  * `cdk docs`        open CDK documentation
 
 Enjoy!
+
+## Deploying
+
+Pushes to `main` deploy automatically via `.github/workflows/deploy.yml`:
+tests run first, then `cdk deploy` runs with keyless AWS access (GitHub OIDC
+→ the `momotaro-fanout-github-deploy` role). Pull requests run the tests only.
+
+- The stack's `.env` lives in SSM as the SecureString
+  `/momotaro/prod/fanout/DOTENV`. Change config there, not in the workflow.
+  Stripe secrets are separate SSM params the Lambdas read at runtime.
+- The Stripe layer is built in CI from `momotaro_layer/requirements.txt`
+  (Linux wheels). Bump versions there.
+- To redeploy without a code change, run the workflow from the Actions tab
+  (`workflow_dispatch`).
