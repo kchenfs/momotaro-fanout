@@ -58,6 +58,8 @@ def _run(monkeypatch, pi_dict, db_order, retrieve=None, fake_table=None):
     monkeypatch.setattr(api, "table", fake_table)
     fake_sns = MagicMock()
     monkeypatch.setattr(api, "sns_client", fake_sns)
+    # Pretend the SSM fetch already ran so the handler never calls AWS.
+    monkeypatch.setattr(api, "_webhook_secret", "whsec_test")
 
     class _Obj:
         def to_dict(self):
@@ -188,3 +190,22 @@ def test_persist_failure_does_not_break_publish(monkeypatch):
     assert table.update_item.called           # we did attempt the enrichment
     assert sns.publish.called                 # order still reaches the kitchen
     assert _published(sns)["customerName"] == "Ken"
+
+
+# ---------------------------------------------------------------------------
+# Stripe secrets come from SSM, fetched once per container
+# ---------------------------------------------------------------------------
+
+def test_stripe_secrets_loaded_from_ssm_once(monkeypatch):
+    monkeypatch.setattr(api, "_webhook_secret", None)
+    monkeypatch.setattr(api.stripe, "api_key", None)
+    values = {api.STRIPE_KEY_PARAM: "sk_from_ssm", api.WEBHOOK_SECRET_PARAM: "whsec_from_ssm"}
+    fake_ssm = MagicMock()
+    fake_ssm.get_parameter.side_effect = lambda Name, WithDecryption: {"Parameter": {"Value": values[Name]}}
+    monkeypatch.setattr(api, "_ssm", fake_ssm)
+
+    assert api._load_stripe_secrets() == "whsec_from_ssm"
+    assert api._load_stripe_secrets() == "whsec_from_ssm"
+
+    assert api.stripe.api_key == "sk_from_ssm"
+    assert fake_ssm.get_parameter.call_count == 2  # one per param, not per call

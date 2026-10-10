@@ -10,7 +10,16 @@ from decimal import Decimal, ROUND_HALF_UP
 from botocore.exceptions import ClientError
 from confirmation_token import make_confirmation_token
 
-stripe.api_key = os.environ.get('STRIPE_CHECKOUT_API_KEY')
+# Stripe key lives in an SSM SecureString param, never in a Lambda env var.
+# Fetched on the first invocation and cached for the container's lifetime.
+_ssm = boto3.client('ssm')
+STRIPE_KEY_PARAM = os.environ.get('STRIPE_KEY_PARAM', '/momotaro/prod/STRIPE_SECRET_KEY')
+
+
+def _load_stripe_key():
+    if not stripe.api_key:
+        stripe.api_key = _ssm.get_parameter(Name=STRIPE_KEY_PARAM, WithDecryption=True)['Parameter']['Value']
+
 dynamodb = boto3.resource('dynamodb')
 table = dynamodb.Table(os.environ.get('DYNAMODB_TABLE_NAME'))
 menu_table = dynamodb.Table('MomotaroSushiMenu_DB')
@@ -124,6 +133,7 @@ def handler(event, context):
         }
 
     try:
+        _load_stripe_key()
         body_raw = event.get('body')
         if not body_raw:
             return {'statusCode': 400, 'body': json.dumps({'error': 'Empty body'})}
