@@ -22,6 +22,7 @@ def handler(event, context):
                 'notes': order_data.get('notes', ''),
                 'items': order_data.get('items', []),
                 'total': float(order_data.get('total', 0)),
+                'tip': float(order_data.get('tip') or 0),
                 'orderDate': order_data.get('orderDate'),
                 'customerName': order_data.get('customerName'),
             }

@@ -10,6 +10,7 @@ in the orders table as KITCHEN#<order id>.
 """
 import json
 import time
+import urllib.error
 import urllib.request
 import uuid
 from decimal import Decimal, ROUND_HALF_UP
@@ -106,6 +107,55 @@ def test_takeout_order_is_paid_and_reaches_kitchen(
     assert ticket["orderType"] == "takeout"
     assert ticket["customerName"] == "E2E Test"
     assert [i["id"] for i in ticket["items"]] == [line["id"]]
+
+
+def test_tipped_takeout_order_charges_tip_and_reaches_kitchen(
+        staging, orders_table, stripe_test_mode, stripe_webhook, menu_item, cleanup):
+    stripe = stripe_test_mode
+    line = _line(menu_item)
+    subtotal_cents = int((Decimal(str(menu_item["Price"])) * line["quantity"] * 100)
+                         .to_integral_value(rounding=ROUND_HALF_UP))
+    tax_cents = int((Decimal(subtotal_cents) * Decimal("0.13")).to_integral_value(rounding=ROUND_HALF_UP))
+    # 15% of the pre-tax subtotal, untaxed
+    tip_cents = int((Decimal(subtotal_cents) * 15 / 100).to_integral_value(rounding=ROUND_HALF_UP))
+
+    status, body = _post(staging["CheckoutApiUrl"], {
+        "amount": 1,
+        "items": [line],
+        "metadata": {"order_id": f"E2E{uuid.uuid4().hex[:6].upper()}"},
+        "notes": "automated end-to-end test (tipped)",
+        "customerName": "E2E Tip",
+        "tip": {"percent": 15},
+    })
+    assert status == 200, body
+    order_id = body["orderId"]
+    cleanup.append(order_id)
+
+    intent_id = body["clientSecret"].split("_secret_")[0]
+    intent = stripe.PaymentIntent.confirm(intent_id, payment_method="pm_card_visa")
+    assert intent.status == "succeeded"
+    assert intent.amount == subtotal_cents + tax_cents + tip_cents
+    assert intent.metadata["tip_cents"] == str(tip_cents)
+
+    paid = _wait_for(orders_table, order_id, lambda i: i.get("paymentStatus") == "PAID",
+                     "the Stripe webhook to mark the tipped order paid")
+    assert paid["tip"] == Decimal(tip_cents) / 100
+    assert paid["total"] == Decimal(subtotal_cents + tax_cents + tip_cents) / 100
+
+    ticket = _wait_for(orders_table, f"KITCHEN#{order_id}", lambda i: True, "the tipped kitchen ticket")
+    assert Decimal(str(ticket["tip"])) == Decimal(tip_cents) / 100
+
+
+def test_tampered_tip_is_rejected_before_any_order(staging, orders_table, menu_item):
+    order_id = f"E2E{uuid.uuid4().hex[:6].upper()}"
+    with pytest.raises(urllib.error.HTTPError) as exc:
+        _post(staging["CheckoutApiUrl"], {
+            "items": [_line(menu_item)],
+            "metadata": {"order_id": order_id},
+            "tip": {"percent": 90},
+        })
+    assert exc.value.code == 400
+    assert "Item" not in orders_table.get_item(Key={"orderId": f"TKOT-{order_id}"}, ConsistentRead=True)
 
 
 def test_dine_in_order_reaches_kitchen(staging, orders_table, menu_item, cleanup):
