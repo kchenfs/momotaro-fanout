@@ -33,6 +33,9 @@ class MomotaroFanoutStack(Stack):
         # the CloudFormation template. Override the names in .env if needed.
         STRIPE_KEY_PARAM = os.getenv("STRIPE_KEY_PARAM", "/momotaro/prod/STRIPE_SECRET_KEY")
         STRIPE_WEBHOOK_SECRET_PARAM = os.getenv("STRIPE_WEBHOOK_SECRET_PARAM", "/momotaro/prod/STRIPE_WEBHOOK_SECRET")
+        # CheckoutApi has used its own key (formerly STRIPE_CHECKOUT_API_KEY), so
+        # it gets its own param rather than sharing the webhook lambda's key.
+        STRIPE_CHECKOUT_KEY_PARAM = os.getenv("STRIPE_CHECKOUT_KEY_PARAM", "/momotaro/prod/STRIPE_CHECKOUT_API_KEY")
         # Shared HMAC secret: checkout_api mints a confirmation token, the
         # order-confirmation API verifies it. Both lambdas must get the same value.
         CONFIRMATION_TOKEN_SECRET = os.getenv("CONFIRMATION_TOKEN_SECRET", "")
@@ -373,14 +376,14 @@ class MomotaroFanoutStack(Stack):
             memory_size=512,               
             environment={
                 **otel_env_vars,
-                "STRIPE_KEY_PARAM": STRIPE_KEY_PARAM,
+                "STRIPE_KEY_PARAM": STRIPE_CHECKOUT_KEY_PARAM,
                 "DYNAMODB_TABLE_NAME": DYNAMODB_TABLE_NAME,
                 "CONFIRMATION_TOKEN_SECRET": CONFIRMATION_TOKEN_SECRET,
                 "ALLOWED_ORIGIN": ALLOWED_ORIGIN
             }
         )
         attach_adot_policy(checkout_api)
-        grant_ssm_read(checkout_api, STRIPE_KEY_PARAM)
+        grant_ssm_read(checkout_api, STRIPE_CHECKOUT_KEY_PARAM)
         checkout_api.add_to_role_policy(iam.PolicyStatement(
             actions=["dynamodb:PutItem"],
             resources=[f"arn:aws:dynamodb:{self.region}:{self.account}:table/{DYNAMODB_TABLE_NAME}"]
