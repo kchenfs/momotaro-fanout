@@ -42,3 +42,14 @@ def test_orderDate_defaults_to_none_when_missing(mock_iot_client, monkeypatch):
 
     published_payload = json.loads(mock_iot_client.publish.call_args.kwargs["payload"])
     assert published_payload["orderDate"] is None
+
+
+@patch("kitchen_display_publisher.iot_client")
+def test_forwards_tip_and_defaults_to_zero(mock_iot_client, monkeypatch):
+    monkeypatch.setattr(kitchen_display_publisher, "PRINTER_TOPIC", "printers/orders/print")
+
+    kitchen_display_publisher.handler(_sns_event({"orderId": "T2", "items": [], "total": 25.6, "tip": 3}), None)
+    assert json.loads(mock_iot_client.publish.call_args.kwargs["payload"])["tip"] == 3
+
+    kitchen_display_publisher.handler(_sns_event({"orderId": "T3", "items": [], "total": 11.3}), None)
+    assert json.loads(mock_iot_client.publish.call_args.kwargs["payload"])["tip"] == 0

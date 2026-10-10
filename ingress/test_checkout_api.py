@@ -2,6 +2,8 @@ import json
 import os
 from unittest.mock import MagicMock
 
+import pytest
+
 # checkout_api builds its DynamoDB table handle at import time and does not
 # guard a missing name, so give it a dummy one before import. Every test
 # monkeypatches api.table anyway, so this value is never actually used.
@@ -163,6 +165,78 @@ def test_amount_recomputed_and_client_amount_ignored(monkeypatch):
     assert fake_create.call_args.kwargs["amount"] == 2260
     stored = fake_table.put_item.call_args.kwargs["Item"]
     assert stored["total"] == Decimal("22.6")
+
+
+# ---------------------------------------------------------------------------
+# Takeout tip — recomputed server-side, untaxed, bounded
+# ---------------------------------------------------------------------------
+
+def test_no_tip_keeps_previous_total(monkeypatch):
+    from decimal import Decimal
+    fake_table, fake_create = _patch_stripe_and_table(monkeypatch)
+
+    api.handler(_event(_real_order_body()), None)
+
+    assert fake_create.call_args.kwargs["amount"] == 2260
+    stored = fake_table.put_item.call_args.kwargs["Item"]
+    assert stored["tip"] == Decimal("0")
+    assert stored["subtotal"] == Decimal("20")
+    assert stored["tax"] == Decimal("2.6")
+    assert "tip_cents" not in fake_create.call_args.kwargs["metadata"]
+
+
+def test_percent_tip_is_on_pretax_subtotal_and_untaxed(monkeypatch):
+    from decimal import Decimal
+    fake_table, fake_create = _patch_stripe_and_table(monkeypatch)
+
+    # 15% of $20.00 = $3.00; $20.00 + $2.60 tax + $3.00 tip = $25.60
+    resp = api.handler(_event(_real_order_body(tip={"percent": 15})), None)
+
+    assert resp["statusCode"] == 200
+    assert fake_create.call_args.kwargs["amount"] == 2560
+    assert fake_create.call_args.kwargs["metadata"]["tip_cents"] == "300"
+    stored = fake_table.put_item.call_args.kwargs["Item"]
+    assert stored["tip"] == Decimal("3")
+    assert stored["total"] == Decimal("25.6")
+
+
+def test_percent_tip_rounds_half_up(monkeypatch):
+    # $43.97 subtotal: 15% = 659.55 cents -> 660
+    _, fake_create = _patch_stripe_and_table(
+        monkeypatch, menu_items=[{"ItemNumber": 1, "Price": "43.97", "Options": []}])
+
+    api.handler(_event(_real_order_body(tip={"percent": 15})), None)
+
+    assert fake_create.call_args.kwargs["amount"] == 4397 + 572 + 660
+
+
+def test_custom_tip_amount(monkeypatch):
+    _, fake_create = _patch_stripe_and_table(monkeypatch)
+
+    api.handler(_event(_real_order_body(tip={"amountCents": 500})), None)
+
+    assert fake_create.call_args.kwargs["amount"] == 2260 + 500
+
+
+@pytest.mark.parametrize("tip", [
+    {"percent": 50},            # not an offered preset
+    {"percent": True},          # bool sneaking in as 1
+    {"percent": "15"},          # string, not a number
+    {"percent": 15.0},          # float, not an int
+    {"amountCents": -100},      # negative
+    {"amountCents": 20001},     # over the cap
+    {"amountCents": 4.5},       # fractional cents
+    {"dollars": 5},             # unknown shape
+    "15%",                      # not an object
+])
+def test_invalid_tip_returns_400_and_charges_nothing(monkeypatch, tip):
+    fake_table, fake_create = _patch_stripe_and_table(monkeypatch)
+
+    resp = api.handler(_event(_real_order_body(tip=tip)), None)
+
+    assert resp["statusCode"] == 400
+    assert not fake_table.put_item.called
+    assert not fake_create.called
 
 
 def test_unknown_item_returns_400(monkeypatch):

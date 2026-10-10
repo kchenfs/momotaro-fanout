@@ -75,8 +75,21 @@ def send_receipt_email(order_data, recipient_email, sender_email):
     final_items_html = "".join(items_html_rows)
 
     total = float(order_data.get('total', 0))
-    subtotal = total / 1.13
-    tax = total - subtotal
+    # Takeout orders store subtotal/tax/tip since tipping launched; older
+    # orders (and dine-in) only have total, so back the split out of it.
+    tip = float(order_data.get('tip') or 0)
+    if order_data.get('subtotal') is not None and order_data.get('tax') is not None:
+        subtotal = float(order_data['subtotal'])
+        tax = float(order_data['tax'])
+    else:
+        subtotal = (total - tip) / 1.13
+        tax = total - tip - subtotal
+    tip_row_html = ''
+    if tip > 0:
+        tip_row_html = f"""<tr>
+                                                <td style="padding: 8px 0; font-size: 14px; color: #64748b;">Tip</td>
+                                                <td style="padding: 8px 0; font-size: 14px; color: #0f172a; font-weight: 500; text-align: right;">CA${tip:.2f}</td>
+                                            </tr>"""
 
     payment_details = order_data.get('paymentDetails', {}) or {}
     chip_html = generate_payment_chip(payment_details)
@@ -88,6 +101,7 @@ def send_receipt_email(order_data, recipient_email, sender_email):
     html_body = html_body.replace('__ITEMS_LIST_PLACEHOLDER__', final_items_html)
     html_body = html_body.replace('__SUBTOTAL_PLACEHOLDER__', f"CA${subtotal:.2f}")
     html_body = html_body.replace('__TAX_PLACEHOLDER__', f"CA${tax:.2f}")
+    html_body = html_body.replace('__TIP_ROW_PLACEHOLDER__', tip_row_html)
     html_body = html_body.replace('__PAYMENT_METHOD_CHIPS_PLACEHOLDER__', chip_html)
 
     response = _ses_client().send_email(

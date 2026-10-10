@@ -103,3 +103,33 @@ def test_send_receipt_email_calls_ses_with_populated_template(monkeypatch):
     assert "TKOT-ABCDE" in html_body
     assert "Green Dragon Roll" in html_body
     assert "__" not in html_body  # no placeholder tokens left unreplaced
+
+
+def test_tipped_order_shows_tip_row_and_stored_split(monkeypatch):
+    order = {
+        "orderId": "TKOT-TIP",
+        "orderDate": "2026-10-10T18:00:00-04:00",
+        "subtotal": Decimal("20"), "tax": Decimal("2.6"), "tip": Decimal("3"),
+        "total": Decimal("25.6"),
+        "items": [{"name": "Chirashi", "quantity": 1, "price": 20.00, "subtotal": 20.00}],
+    }
+    html = _render(order, monkeypatch)
+
+    assert ">Tip<" in html and "CA$3.00" in html
+    assert "CA$20.00" in html   # subtotal is not inflated by the tip
+    assert "CA$2.60" in html    # tax is on food only
+    assert "CA$25.60" in html
+    assert "__" not in html
+
+
+def test_untipped_order_has_no_tip_row(monkeypatch):
+    order = {
+        "orderId": "TKOT-NOTIP",
+        "orderDate": "2026-10-10T18:00:00-04:00",
+        "total": 11.30,
+        "items": [{"name": "Miso Soup", "quantity": 2, "price": 2.50, "subtotal": 5.00}],
+    }
+    html = _render(order, monkeypatch)
+
+    assert ">Tip<" not in html
+    assert "__" not in html

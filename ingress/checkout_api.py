@@ -26,6 +26,10 @@ menu_table = dynamodb.Table('MomotaroSushiMenu_DB')
 
 TAX_RATE = Decimal('0.13')
 MAX_ITEMS = 20
+# Takeout tip: one of these percentages of the pre-tax subtotal, or a custom
+# amount in cents up to MAX_TIP_CENTS. Mirrored in TableTap's lib/tip.ts.
+TIP_PERCENTS = (10, 15, 18)
+MAX_TIP_CENTS = 20000
 # Restrict browser callers to the storefront origin instead of '*'. The real
 # checkout path reaches this lambda server-side via the Next.js proxy (no CORS
 # involved), so this only tightens direct-from-browser calls.
@@ -72,8 +76,8 @@ def _menu_lookup_by_item_number():
         scan_kwargs['ExclusiveStartKey'] = resp['LastEvaluatedKey']
     return lookup
 
-def _compute_order_total_cents(items):
-    """Recompute the order total from the canonical menu/options prices
+def _compute_subtotal_cents(items):
+    """Recompute the pre-tax subtotal from the canonical menu/options prices
     instead of trusting the client-supplied amount."""
     if not items:
         raise ValueError("No items in order")
@@ -115,8 +119,34 @@ def _compute_order_total_cents(items):
 
         subtotal += line_price * quantity
 
-    total_with_tax = subtotal * (1 + TAX_RATE)
-    return int((total_with_tax * 100).to_integral_value(rounding=ROUND_HALF_UP))
+    return int((subtotal * 100).to_integral_value(rounding=ROUND_HALF_UP))
+
+def _tax_cents(subtotal_cents):
+    return int((Decimal(subtotal_cents) * TAX_RATE).to_integral_value(rounding=ROUND_HALF_UP))
+
+def _compute_tip_cents(tip, subtotal_cents):
+    """Validate the client's tip choice and return the tip in cents.
+
+    The client sends a choice, never a trusted dollar figure for presets:
+    {"percent": 15} is recomputed from our own subtotal; {"amountCents": 500}
+    is a custom amount, bounded. Missing/null means no tip. Raises ValueError
+    on anything else so a tampered tip can't silently change the charge.
+    """
+    if not tip:
+        return 0
+    if not isinstance(tip, dict):
+        raise ValueError("Invalid tip")
+    if 'percent' in tip:
+        percent = tip['percent']
+        if isinstance(percent, bool) or not isinstance(percent, int) or percent not in TIP_PERCENTS:
+            raise ValueError("Invalid tip percent")
+        return int((Decimal(subtotal_cents) * percent / 100).to_integral_value(rounding=ROUND_HALF_UP))
+    if 'amountCents' in tip:
+        cents = tip['amountCents']
+        if isinstance(cents, bool) or not isinstance(cents, int) or not 0 <= cents <= MAX_TIP_CENTS:
+            raise ValueError("Invalid tip amount")
+        return cents
+    raise ValueError("Invalid tip")
 
 def handler(event, context):
     print(f"Received event: {json.dumps(event)}")
@@ -172,9 +202,16 @@ def handler(event, context):
         # Recompute the amount from canonical menu prices — never trust the
         # client-supplied amount for the intent that actually gets charged.
         try:
-            amount = _compute_order_total_cents(items)
+            subtotal_cents = _compute_subtotal_cents(items)
         except ValueError:
             return {'statusCode': 400, 'headers': { 'Access-Control-Allow-Origin': ALLOWED_ORIGIN }, 'body': json.dumps({'error': 'Invalid order items'})}
+        try:
+            tip_cents = _compute_tip_cents(body.get('tip'), subtotal_cents)
+        except ValueError:
+            return {'statusCode': 400, 'headers': { 'Access-Control-Allow-Origin': ALLOWED_ORIGIN }, 'body': json.dumps({'error': 'Invalid tip'})}
+        # Tax applies to food only; the tip is added on top, untaxed.
+        tax_cents = _tax_cents(subtotal_cents)
+        amount = subtotal_cents + tax_cents + tip_cents
 
         # 3. Write the confirmed order to DynamoDB — reject if this orderId
         # already exists instead of silently overwriting someone else's order.
@@ -186,6 +223,9 @@ def handler(event, context):
             'paymentStatus': 'UNPAID',
             'items': items,
             'notes': notes,
+            'subtotal': subtotal_cents / 100,
+            'tax': tax_cents / 100,
+            'tip': tip_cents / 100,
             'total': amount / 100,
             'orderDate': eastern_time.isoformat(),
             'receiptEmail': customer_email
@@ -211,6 +251,8 @@ def handler(event, context):
         # Mirror the name into the intent metadata so it's visible in the
         # Stripe dashboard when reconciling or refunding.
         intent_metadata = {'order_id': order_id}
+        if tip_cents:
+            intent_metadata['tip_cents'] = str(tip_cents)
         if customer_name is not None:
             intent_metadata['customer_name'] = customer_name
 
