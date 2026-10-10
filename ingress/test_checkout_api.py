@@ -79,6 +79,8 @@ _FAKE_MENU_ITEMS = [{"ItemNumber": 1, "Price": "20.00", "Options": []}]
 def _patch_stripe_and_table(monkeypatch, menu_items=None):
     fake_table = MagicMock()
     monkeypatch.setattr(api, "table", fake_table)
+    # Pretend the SSM fetch already ran so the handler never calls AWS.
+    monkeypatch.setattr(api.stripe, "api_key", "sk_test_123")
 
     fake_menu = MagicMock()
     fake_menu.scan.return_value = {"Items": _FAKE_MENU_ITEMS if menu_items is None else menu_items}
@@ -220,3 +222,20 @@ def test_confirmation_token_returned_and_valid(monkeypatch):
 
     assert body["confirmationToken"]  # non-empty
     assert body["confirmationToken"] == make_confirmation_token(body["orderId"])
+
+
+# ---------------------------------------------------------------------------
+# Stripe key comes from SSM, fetched once per container
+# ---------------------------------------------------------------------------
+
+def test_stripe_key_loaded_from_ssm_once(monkeypatch):
+    monkeypatch.setattr(api.stripe, "api_key", None)
+    fake_ssm = MagicMock()
+    fake_ssm.get_parameter.return_value = {"Parameter": {"Value": "sk_from_ssm"}}
+    monkeypatch.setattr(api, "_ssm", fake_ssm)
+
+    api._load_stripe_key()
+    api._load_stripe_key()
+
+    assert api.stripe.api_key == "sk_from_ssm"
+    fake_ssm.get_parameter.assert_called_once_with(Name=api.STRIPE_KEY_PARAM, WithDecryption=True)

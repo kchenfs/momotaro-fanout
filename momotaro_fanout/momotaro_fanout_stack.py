@@ -28,9 +28,14 @@ class MomotaroFanoutStack(Stack):
         IOT_ENDPOINT_URL = os.getenv("IOT_ENDPOINT_URL")
         PRINTER_MQTT_TOPIC = os.getenv("PRINTER_MQTT_TOPIC")
         VERIFIED_SENDER_EMAIL = os.getenv("VERIFIED_SENDER_EMAIL")
-        STRIPE_SECRET_KEY = os.getenv("STRIPE_SECRET_KEY")
-        STRIPE_WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET")
-        STRIPE_CHECKOUT_API_KEY = os.getenv("STRIPE_CHECKOUT_API_KEY")
+        # Stripe secrets are SSM SecureString parameter NAMES, not values. The
+        # lambdas fetch them at runtime, so no secret lands in Lambda config or
+        # the CloudFormation template. Override the names in .env if needed.
+        STRIPE_KEY_PARAM = os.getenv("STRIPE_KEY_PARAM", "/momotaro/prod/STRIPE_SECRET_KEY")
+        STRIPE_WEBHOOK_SECRET_PARAM = os.getenv("STRIPE_WEBHOOK_SECRET_PARAM", "/momotaro/prod/STRIPE_WEBHOOK_SECRET")
+        # CheckoutApi has used its own key (formerly STRIPE_CHECKOUT_API_KEY), so
+        # it gets its own param rather than sharing the webhook lambda's key.
+        STRIPE_CHECKOUT_KEY_PARAM = os.getenv("STRIPE_CHECKOUT_KEY_PARAM", "/momotaro/prod/STRIPE_CHECKOUT_API_KEY")
         # Shared HMAC secret: checkout_api mints a confirmation token, the
         # order-confirmation API verifies it. Both lambdas must get the same value.
         CONFIRMATION_TOKEN_SECRET = os.getenv("CONFIRMATION_TOKEN_SECRET", "")
@@ -43,8 +48,18 @@ class MomotaroFanoutStack(Stack):
         # cap, since past the cap SMS fails silently (publish succeeds, nothing sends).
         SMS_SPEND_ALARM_USD = float(os.getenv("SMS_SPEND_ALARM_USD", "0.80"))
 
-        if not STRIPE_SECRET_KEY:
-            raise ValueError("STRIPE_SECRET_KEY is missing. Check your .env file!")
+        def grant_ssm_read(fn, *param_names):
+            fn.add_to_role_policy(iam.PolicyStatement(
+                actions=["ssm:GetParameter"],
+                resources=[f"arn:aws:ssm:{self.region}:{self.account}:parameter/{name.lstrip('/')}"
+                           for name in param_names]
+            ))
+            # SecureString decrypt, only when the request comes through SSM.
+            fn.add_to_role_policy(iam.PolicyStatement(
+                actions=["kms:Decrypt"],
+                resources=["*"],
+                conditions={"StringEquals": {"kms:ViaService": f"ssm.{self.region}.amazonaws.com"}}
+            ))
 
         # ==========================================
         # 1. OPENTELEMETRY LAYER SETUP (Updated)
@@ -322,12 +337,13 @@ class MomotaroFanoutStack(Stack):
             environment={
                 **otel_env_vars,
                 "SNS_TOPIC_ARN": order_topic.topic_arn,
-                "STRIPE_SECRET_KEY": STRIPE_SECRET_KEY,
-                "STRIPE_WEBHOOK_SECRET": STRIPE_WEBHOOK_SECRET,
+                "STRIPE_KEY_PARAM": STRIPE_KEY_PARAM,
+                "STRIPE_WEBHOOK_SECRET_PARAM": STRIPE_WEBHOOK_SECRET_PARAM,
                 "DYNAMODB_TABLE_NAME": DYNAMODB_TABLE_NAME 
             }
         )
         attach_adot_policy(takeout_ingress)
+        grant_ssm_read(takeout_ingress, STRIPE_KEY_PARAM, STRIPE_WEBHOOK_SECRET_PARAM)
         order_topic.grant_publish(takeout_ingress)
         apigw.LambdaRestApi(self, "TakeoutApiEndpoint", handler=takeout_ingress)
         takeout_ingress.add_to_role_policy(iam.PolicyStatement(
@@ -360,13 +376,14 @@ class MomotaroFanoutStack(Stack):
             memory_size=512,               
             environment={
                 **otel_env_vars,
-                "STRIPE_CHECKOUT_API_KEY": STRIPE_CHECKOUT_API_KEY,
+                "STRIPE_KEY_PARAM": STRIPE_CHECKOUT_KEY_PARAM,
                 "DYNAMODB_TABLE_NAME": DYNAMODB_TABLE_NAME,
                 "CONFIRMATION_TOKEN_SECRET": CONFIRMATION_TOKEN_SECRET,
                 "ALLOWED_ORIGIN": ALLOWED_ORIGIN
             }
         )
         attach_adot_policy(checkout_api)
+        grant_ssm_read(checkout_api, STRIPE_CHECKOUT_KEY_PARAM)
         checkout_api.add_to_role_policy(iam.PolicyStatement(
             actions=["dynamodb:PutItem"],
             resources=[f"arn:aws:dynamodb:{self.region}:{self.account}:table/{DYNAMODB_TABLE_NAME}"]

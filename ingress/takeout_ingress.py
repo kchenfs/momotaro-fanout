@@ -13,8 +13,20 @@ dynamodb = boto3.resource('dynamodb')
 table = dynamodb.Table(os.environ.get('DYNAMODB_TABLE_NAME'))
 
 SNS_TOPIC_ARN = os.environ.get('SNS_TOPIC_ARN')
-stripe.api_key = os.environ.get('STRIPE_SECRET_KEY') # <--- Changed this!
-webhook_secret = os.environ.get('STRIPE_WEBHOOK_SECRET')
+# Stripe secrets live in SSM SecureString params, never in Lambda env vars.
+# Fetched on the first invocation and cached for the container's lifetime.
+_ssm = boto3.client('ssm')
+STRIPE_KEY_PARAM = os.environ.get('STRIPE_KEY_PARAM', '/momotaro/prod/STRIPE_SECRET_KEY')
+WEBHOOK_SECRET_PARAM = os.environ.get('STRIPE_WEBHOOK_SECRET_PARAM', '/momotaro/prod/STRIPE_WEBHOOK_SECRET')
+_webhook_secret = None
+
+
+def _load_stripe_secrets():
+    global _webhook_secret
+    if _webhook_secret is None:
+        stripe.api_key = _ssm.get_parameter(Name=STRIPE_KEY_PARAM, WithDecryption=True)['Parameter']['Value']
+        _webhook_secret = _ssm.get_parameter(Name=WEBHOOK_SECRET_PARAM, WithDecryption=True)['Parameter']['Value']
+    return _webhook_secret
 
 # Non-whitespace control characters to strip from names. Kept identical to
 # checkout_api.sanitize_customer_name so both ends agree on what a name is.
@@ -92,6 +104,7 @@ def handler(event, context):
         headers = event.get('headers') or {}
         sig_header = headers.get('stripe-signature') or headers.get('Stripe-Signature') or ''
 
+        webhook_secret = _load_stripe_secrets()
         stripe_event = stripe.Webhook.construct_event(payload=payload, sig_header=sig_header, secret=webhook_secret)
 
         if stripe_event['type'] == 'payment_intent.succeeded':
