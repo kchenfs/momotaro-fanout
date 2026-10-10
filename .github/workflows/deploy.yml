@@ -1,9 +1,13 @@
-# Deploys MomotaroFanoutStack to production on every push to main.
+# Deploys MomotaroFanoutStack to production on every push to main, but only
+# after the same code has been deployed to MomotaroFanoutStaging and a real
+# takeout order and dine-in order have gone through it end to end.
 #
 # AWS access is keyless: GitHub's OIDC token is exchanged for the
 # momotaro-fanout-github-deploy role, which only trusts pushes to main of this
 # repo and can only assume the CDK bootstrap roles and read the stack's .env
-# from SSM. Pull requests run the tests but never get AWS credentials.
+# from SSM. The end-to-end job uses a separate staging-only role
+# (momotaro-e2e-staging, defined in the staging stack). Pull requests run the
+# unit tests but never get AWS credentials.
 name: Deploy
 
 on:
@@ -13,7 +17,7 @@ on:
   workflow_dispatch:
 
 # Never run two deploys at once; queue the newer one instead of cancelling a
-# deploy halfway through.
+# deploy halfway through. Staging is shared, so the e2e run is inside the lock.
 concurrency:
   group: ${{ github.event_name == 'pull_request' && format('test-{0}', github.ref) || 'deploy-prod' }}
   cancel-in-progress: false
@@ -24,6 +28,7 @@ permissions:
 env:
   AWS_REGION: ca-central-1
   DEPLOY_ROLE_ARN: arn:aws:iam::798965869505:role/momotaro-fanout-github-deploy
+  E2E_ROLE_ARN: arn:aws:iam::798965869505:role/momotaro-e2e-staging
   # The stack's non-Stripe config (table name, IoT endpoint, sender email,
   # CONFIRMATION_TOKEN_SECRET, ...) in .env format. Edit it in SSM, not here.
   DOTENV_PARAM: /momotaro/prod/fanout/DOTENV
@@ -45,15 +50,36 @@ jobs:
                       -r momotaro_layer/requirements.txt boto3
 
       # boto3 clients are created at import time and need a region, even
-      # though the tests never call AWS.
+      # though the tests never call AWS. tests/e2e skips itself here.
       - name: Run tests
         env:
           AWS_DEFAULT_REGION: ca-central-1
-        run: pytest -q ingress workers
+        run: pytest -q ingress workers tests
 
-  deploy:
+  deploy-staging:
     needs: test
     if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - uses: ./.github/actions/cdk-deploy
+        with:
+          stack: MomotaroFanoutStaging
+          dotenv-param: ${{ env.DOTENV_PARAM }}
+
+  # Places a takeout order (Stripe test card) and a dine-in order against
+  # staging and waits for each to be saved and sent to the (staging) kitchen.
+  e2e:
+    needs: deploy-staging
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -66,37 +92,34 @@ jobs:
           python-version: "3.12"
           cache: pip
 
-      - uses: actions/setup-node@v4
+      - name: Install test dependencies
+        run: pip install -r requirements-dev.txt -r momotaro_layer/requirements.txt boto3
+
+      - uses: aws-actions/configure-aws-credentials@v4
         with:
-          node-version: "22"
+          role-to-assume: ${{ env.E2E_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
 
-      - name: Install CDK app dependencies
-        run: pip install -r requirements.txt
+      - name: Place test orders on staging
+        env:
+          E2E_STACK_NAME: MomotaroFanoutStaging
+        run: pytest -v tests/e2e
 
-      # Lambda runs Linux x86_64, so fetch manylinux wheels explicitly rather
-      # than whatever matches the runner.
-      - name: Build Stripe layer
-        run: |
-          pip install -r momotaro_layer/requirements.txt \
-            --target momotaro_layer/python \
-            --platform manylinux2014_x86_64 \
-            --implementation cp \
-            --python-version 3.12 \
-            --only-binary=:all:
+  deploy:
+    needs: e2e
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
 
       - uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ env.DEPLOY_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
 
-      # This repo is public, so mask every value before anything can echo it.
-      - name: Write .env from SSM
-        run: |
-          aws ssm get-parameter --name "$DOTENV_PARAM" --with-decryption \
-            --query Parameter.Value --output text > .env
-          while IFS='=' read -r key value; do
-            [ -n "$value" ] && echo "::add-mask::${value}"
-          done < <(grep -v '^\s*#' .env | grep '=')
-
-      - name: Deploy
-        run: npx --yes aws-cdk@2 deploy MomotaroFanoutStack --require-approval never --progress events
+      - uses: ./.github/actions/cdk-deploy
+        with:
+          stack: MomotaroFanoutStack
+          dotenv-param: ${{ env.DOTENV_PARAM }}

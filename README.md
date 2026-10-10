@@ -1,5 +1,47 @@
+# Momotaro order backend (momotaro-fanout)
 
-# Welcome to your CDK Python project!
+## Staging and end-to-end order tests
+
+Every push to `main` goes through three steps in `.github/workflows/deploy.yml`:
+
+1. Deploy `MomotaroFanoutStaging`, a copy of the backend built from the same
+   code (`app.py`, `stage="staging"`).
+2. Run `tests/e2e`. It places a takeout order (paid with Stripe's `pm_card_visa`
+   test card) and a dine-in order against staging, then waits until each is
+   saved and its kitchen ticket is published. The test deletes its own rows.
+3. Deploy `MomotaroFanoutStack` (prod), but only if step 2 passed.
+
+Staging cannot reach the restaurant or customers:
+
+- It has its own orders table. Prod's `momotaroOrdersDatabase` is never touched.
+  It reads the real menu table so prices match.
+- Stripe runs in test mode. Keys come from `/momotaro/staging/*` in SSM, and
+  the e2e test refuses to run if the key isn't a test key.
+- Kitchen tickets go to `staging/printers/orders/print`, which no printer or
+  kitchen display subscribes to. A staging-only IoT rule copies each ticket
+  into the staging table as `KITCHEN#<order id>` so the test can check it.
+- No receipt email, SMS or contact opt-in API, and no Telegram alerting.
+
+### One-time setup
+
+1. In the Stripe dashboard, switch to **test mode** and copy the secret key
+   (`sk_test_...`). Store it in SSM:
+   `aws ssm put-parameter --region ca-central-1 --name /momotaro/staging/STRIPE_SECRET_KEY --type SecureString --value sk_test_...`
+2. Copy the test-mode publishable key (`pk_test_...`) too. The site's browser
+   tests (TableTap2.0) build with it:
+   `aws ssm put-parameter --region ca-central-1 --name /momotaro/staging/STRIPE_PUBLISHABLE_KEY --type String --value pk_test_...`
+3. Nothing else. On its first run the e2e test registers the
+   Stripe test-mode webhook for the staging URL and stores its signing secret in
+   `/momotaro/staging/STRIPE_WEBHOOK_SECRET`.
+
+To run the tests by hand against a deployed staging stack:
+`E2E_STACK_NAME=MomotaroFanoutStaging pytest -v tests/e2e` (with AWS credentials
+that can assume `momotaro-e2e-staging`, or broader).
+
+---
+
+
+## CDK project notes
 
 This is a blank project for CDK development with Python.
 

@@ -1,0 +1,52 @@
+name: CDK deploy
+description: Build the Stripe layer, write .env from SSM and deploy one stack. Expects AWS credentials for the deploy role.
+inputs:
+  stack:
+    description: Stack to deploy (MomotaroFanoutStack or MomotaroFanoutStaging)
+    required: true
+  dotenv-param:
+    description: SSM parameter holding the stack's .env
+    required: true
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-python@v5
+      with:
+        python-version: "3.12"
+        cache: pip
+
+    - uses: actions/setup-node@v4
+      with:
+        node-version: "22"
+
+    - name: Install CDK app dependencies
+      shell: bash
+      run: pip install -r requirements.txt
+
+    # Lambda runs Linux x86_64, so fetch manylinux wheels explicitly rather
+    # than whatever matches the runner.
+    - name: Build Stripe layer
+      shell: bash
+      run: |
+        pip install -r momotaro_layer/requirements.txt \
+          --target momotaro_layer/python \
+          --platform manylinux2014_x86_64 \
+          --implementation cp \
+          --python-version 3.12 \
+          --only-binary=:all:
+
+    # This repo is public, so mask every value before anything can echo it.
+    # Staging overrides every value it uses from here, but the app synthesizes
+    # both stacks, so it still needs the file.
+    - name: Write .env from SSM
+      shell: bash
+      run: |
+        aws ssm get-parameter --name "${{ inputs.dotenv-param }}" --with-decryption \
+          --query Parameter.Value --output text > .env
+        while IFS='=' read -r key value; do
+          [ -n "$value" ] && echo "::add-mask::${value}"
+        done < <(grep -v '^\s*#' .env | grep '=')
+
+    - name: Deploy
+      shell: bash
+      run: npx --yes aws-cdk@2 deploy "${{ inputs.stack }}" --require-approval never --progress events
