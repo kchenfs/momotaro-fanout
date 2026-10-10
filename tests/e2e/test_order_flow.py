@@ -102,6 +102,13 @@ def test_takeout_order_is_paid_and_reaches_kitchen(
     assert paid["paymentId"] == intent_id
     assert paid["customerName"] == "E2E Test"
 
+    # The webhook records where the pickup name came from (needs UpdateItem).
+    _wait_for(
+        orders_table, order_id,
+        lambda i: i.get("customerNameSource") == "customer",
+        "the webhook to save customerNameSource",
+    )
+
     ticket = _wait_for(orders_table, f"KITCHEN#{order_id}", lambda i: True, "the kitchen ticket")
     assert ticket["order_id"] == order_id
     assert ticket["orderType"] == "takeout"
