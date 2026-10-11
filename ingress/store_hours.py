@@ -1,9 +1,9 @@
 """Takeout opening hours, so checkout can refuse orders while the kitchen is closed.
 
 WEEKLY_HOURS maps a weekday (Monday=0 ... Sunday=6) to a list of
-("HH:MM", "HH:MM") pairs in Toronto time: when orders open, and the last
-minute an order is accepted (orders at that minute or later are refused). A day missing from the
-map, or mapped to [], is closed all day. Two pairs model a lunch/dinner split.
+("HH:MM", "HH:MM") pairs in Toronto time: when orders open, and the
+last-order time (an order at that minute or later is refused). A day missing
+from the map, or mapped to [], is closed all day. Two pairs model a lunch/dinner split.
 
 WEEKLY_HOURS = None means "hours not set yet": is_open() is always True.
 Only prod enforces the hours (ENFORCE_STORE_HOURS=1 on CheckoutApi); staging
