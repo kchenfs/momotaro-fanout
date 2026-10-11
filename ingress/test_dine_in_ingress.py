@@ -1,11 +1,18 @@
 import json
+import sys
 from decimal import Decimal
 from unittest.mock import MagicMock
 
 import pytest
 from botocore.exceptions import ClientError
 
-import dine_in_ingress as ingress
+# In Lambda, opentelemetry comes from the ADOT layer; it isn't installed in CI.
+try:
+    import opentelemetry  # noqa: F401
+except ImportError:
+    sys.modules["opentelemetry"] = MagicMock()
+
+import dine_in_ingress as ingress  # noqa: E402
 import menu_pricing
 
 MENU = [
