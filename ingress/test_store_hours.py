@@ -31,10 +31,10 @@ def test_closed_between_services_and_overnight():
     assert not sh.is_open(at(0, "11:29"), HOURS)
 
 
-def test_last_orders_stop_before_closing():
-    # 21:30 close minus 15 minutes: 21:14 is fine, 21:15 is too late.
-    assert sh.is_open(at(0, "21:14"), HOURS)
-    assert not sh.is_open(at(0, "21:15"), HOURS)
+def test_last_order_time_is_the_cutoff():
+    # A 21:30 last order: 21:29 is fine, 21:30 is too late.
+    assert sh.is_open(at(0, "21:29"), HOURS)
+    assert not sh.is_open(at(0, "21:30"), HOURS)
 
 
 def test_day_missing_from_map_is_closed():
@@ -82,15 +82,15 @@ def test_checkout_ignores_hours_when_not_enforced(monkeypatch):
     assert res["statusCode"] == 400
 
 
-def test_real_hours_last_orders_1013pm_and_1058pm_on_fri_sat():
+def test_real_hours_last_orders_1028pm_and_1058pm_on_fri_sat():
     for day in range(7):
-        last = "22:58" if day in (4, 5) else "22:13"
-        just_before = "22:57" if day in (4, 5) else "22:12"
+        last = "22:58" if day in (4, 5) else "22:28"
+        just_before = "22:57" if day in (4, 5) else "22:27"
         assert not sh.is_open(at(day, "11:49"))
         assert sh.is_open(at(day, "11:50"))
         assert sh.is_open(at(day, just_before))
         assert not sh.is_open(at(day, last))
-    # Thursday at 10:20 PM is closed; Friday at 10:20 PM is still open.
-    assert not sh.is_open(at(3, "22:20"))
-    assert sh.is_open(at(4, "22:20"))
+    # Thursday at 10:40 PM is closed; Friday at 10:40 PM is still open.
+    assert not sh.is_open(at(3, "22:40"))
+    assert sh.is_open(at(4, "22:40"))
     assert sh.next_opening(at(0, "23:00")) == at(1, "11:50")
