@@ -1,8 +1,9 @@
 """Takeout opening hours, so checkout can refuse orders while the kitchen is closed.
 
 WEEKLY_HOURS maps a weekday (Monday=0 ... Sunday=6) to a list of
-("HH:MM", "HH:MM") open/close pairs in Toronto time. A day missing from the
-map, or mapped to [], is closed all day. Two pairs model a lunch/dinner split.
+("HH:MM", "HH:MM") pairs in Toronto time: when orders open, and the
+last-order time (an order at that minute or later is refused). A day missing
+from the map, or mapped to [], is closed all day. Two pairs model a lunch/dinner split.
 
 WEEKLY_HOURS = None means "hours not set yet": is_open() is always True.
 Only prod enforces the hours (ENFORCE_STORE_HOURS=1 on CheckoutApi); staging
@@ -15,14 +16,10 @@ from zoneinfo import ZoneInfo
 
 TZ = ZoneInfo("America/Toronto")
 
-# Takeout runs 11:50 AM to 10:28 PM (last orders 10:13 PM). On Friday and
-# Saturday the restaurant closes at 11 PM and the last online order is 10:58 PM,
-# so the close is set 15 min (LAST_ORDER_MINUTES) past that, at 23:13.
+# Orders open at 11:50 AM. Last orders 10:28 PM, or 10:58 PM on Friday and
+# Saturday when the restaurant stays open till 11 PM.
 WEEKLY_HOURS = {day: [("11:50", "22:28")] for day in range(7)}
-WEEKLY_HOURS[4] = WEEKLY_HOURS[5] = [("11:50", "23:13")]
-
-# Stop taking orders this long before closing so the kitchen can finish them.
-LAST_ORDER_MINUTES = 15
+WEEKLY_HOURS[4] = WEEKLY_HOURS[5] = [("11:50", "22:58")]
 
 
 def _minutes(hhmm):
@@ -37,7 +34,7 @@ def is_open(now=None, hours=WEEKLY_HOURS):
     now = (now or datetime.now(TZ)).astimezone(TZ)
     minute_of_day = now.hour * 60 + now.minute
     for open_at, close_at in hours.get(now.weekday(), []):
-        if _minutes(open_at) <= minute_of_day < _minutes(close_at) - LAST_ORDER_MINUTES:
+        if _minutes(open_at) <= minute_of_day < _minutes(close_at):
             return True
     return False
 
