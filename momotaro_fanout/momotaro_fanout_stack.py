@@ -414,11 +414,28 @@ class MomotaroFanoutStack(Stack):
             memory_size=512,
             environment={
                 **otel_env_vars,
-                "SNS_TOPIC_ARN": order_topic.topic_arn
+                "SNS_TOPIC_ARN": order_topic.topic_arn,
+                "DYNAMODB_TABLE_NAME": DYNAMODB_TABLE_NAME,
+                # Prod refuses orders outside the hours in ingress/store_hours.py
+                # and from tables other than table-1..table-11. Staging takes
+                # test tables at any hour for the e2e tests.
+                "ENFORCE_STORE_HOURS": "1" if is_prod else "0",
+                "DINE_IN_TABLE_COUNT": "11" if is_prod else "0",
             }
         )
         attach_adot_policy(dine_in_ingress)
         order_topic.grant_publish(dine_in_ingress)
+        # Claims the order id before publishing so a retried request can't
+        # print a second kitchen ticket (and releases it if publishing fails).
+        dine_in_ingress.add_to_role_policy(iam.PolicyStatement(
+            actions=["dynamodb:PutItem", "dynamodb:GetItem", "dynamodb:DeleteItem"],
+            resources=[f"arn:aws:dynamodb:{self.region}:{self.account}:table/{DYNAMODB_TABLE_NAME}"]
+        ))
+        # Prices are recomputed from the canonical menu, never the browser.
+        dine_in_ingress.add_to_role_policy(iam.PolicyStatement(
+            actions=["dynamodb:Scan"],
+            resources=[f"arn:aws:dynamodb:{self.region}:{self.account}:table/MomotaroSushiMenu_DB"]
+        ))
         dine_in_api = apigw.LambdaRestApi(self, "DineInApiEndpoint", handler=dine_in_ingress)
 
         checkout_api = _lambda.Function(self, "CheckoutApi",
