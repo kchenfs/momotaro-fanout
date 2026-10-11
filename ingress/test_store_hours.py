@@ -82,10 +82,15 @@ def test_checkout_ignores_hours_when_not_enforced(monkeypatch):
     assert res["statusCode"] == 400
 
 
-def test_real_hours_every_day_with_last_orders_at_1013pm():
+def test_real_hours_last_orders_1013pm_and_1058pm_on_fri_sat():
     for day in range(7):
+        last = "22:58" if day in (4, 5) else "22:13"
+        just_before = "22:57" if day in (4, 5) else "22:12"
         assert not sh.is_open(at(day, "11:49"))
         assert sh.is_open(at(day, "11:50"))
-        assert sh.is_open(at(day, "22:12"))
-        assert not sh.is_open(at(day, "22:13"))
+        assert sh.is_open(at(day, just_before))
+        assert not sh.is_open(at(day, last))
+    # Thursday at 10:20 PM is closed; Friday at 10:20 PM is still open.
+    assert not sh.is_open(at(3, "22:20"))
+    assert sh.is_open(at(4, "22:20"))
     assert sh.next_opening(at(0, "23:00")) == at(1, "11:50")

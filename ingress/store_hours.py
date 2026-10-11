@@ -15,8 +15,11 @@ from zoneinfo import ZoneInfo
 
 TZ = ZoneInfo("America/Toronto")
 
-# Takeout runs 11:50 AM to 10:28 PM every day; last orders 10:13 PM.
+# Takeout runs 11:50 AM to 10:28 PM (last orders 10:13 PM). On Friday and
+# Saturday the restaurant closes at 11 PM and the last online order is 10:58 PM,
+# so the close is set 15 min (LAST_ORDER_MINUTES) past that, at 23:13.
 WEEKLY_HOURS = {day: [("11:50", "22:28")] for day in range(7)}
+WEEKLY_HOURS[4] = WEEKLY_HOURS[5] = [("11:50", "23:13")]
 
 # Stop taking orders this long before closing so the kitchen can finish them.
 LAST_ORDER_MINUTES = 15
