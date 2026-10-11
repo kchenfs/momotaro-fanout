@@ -82,10 +82,10 @@ def test_checkout_ignores_hours_when_not_enforced(monkeypatch):
     assert res["statusCode"] == 400
 
 
-def test_real_hours_last_orders_1013pm_and_1043pm_on_fri_sat():
+def test_real_hours_last_orders_1013pm_and_1058pm_on_fri_sat():
     for day in range(7):
-        last = "22:43" if day in (4, 5) else "22:13"
-        just_before = "22:42" if day in (4, 5) else "22:12"
+        last = "22:58" if day in (4, 5) else "22:13"
+        just_before = "22:57" if day in (4, 5) else "22:12"
         assert not sh.is_open(at(day, "11:49"))
         assert sh.is_open(at(day, "11:50"))
         assert sh.is_open(at(day, just_before))
