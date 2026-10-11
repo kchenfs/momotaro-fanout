@@ -1,15 +1,17 @@
-"""Takeout opening hours, so checkout can refuse orders while the kitchen is closed.
+"""Ordering hours, so takeout checkout and dine-in can refuse orders while the
+kitchen is closed.
 
 WEEKLY_HOURS maps a weekday (Monday=0 ... Sunday=6) to a list of
 ("HH:MM", "HH:MM") pairs in Toronto time: when orders open, and the
 last-order time (an order at that minute or later is refused). A day missing
-from the map, or mapped to [], is closed all day. Two pairs model a lunch/dinner split.
+from the map, or mapped to [], is closed all day. Two pairs model a
+lunch/dinner split.
 
 WEEKLY_HOURS = None means "hours not set yet": is_open() is always True.
-Only prod enforces the hours (ENFORCE_STORE_HOURS=1 on CheckoutApi); staging
-stays open around the clock so its order tests pass at any hour. Mirrored in
-TableTap's lib/storeHours.ts, which shows the same hours on the site; keep
-the two in step.
+Only prod enforces the hours (ENFORCE_STORE_HOURS=1 on CheckoutApi and
+DineInIngress); staging stays open around the clock so its order tests pass
+at any hour. Mirrored in TableTap's lib/storeHours.ts, which shows the same
+hours on the site; keep the two in step.
 """
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
