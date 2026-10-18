@@ -80,6 +80,15 @@ def test_unknown_item_is_refused(fakes):
     fakes["sns"].publish.assert_not_called()
 
 
+def test_sold_out_item_is_refused(fakes):
+    fakes["menu"].scan.return_value = {"Items": MENU + [
+        {"ItemNumber": Decimal("303"), "ItemName": "Spider Roll", "Price": "14.00", "SoldOut": True}]}
+    resp = ingress.handler(_event(items=[_line("101"), _line("303")]), None)
+    assert resp["statusCode"] == 400
+    assert json.loads(resp["body"])["error"].startswith("Spider Roll is sold out.")
+    fakes["sns"].publish.assert_not_called()
+
+
 @pytest.mark.parametrize("quantity", [0, -1, 51, "lots"])
 def test_bad_quantity_is_refused(fakes, quantity):
     resp = ingress.handler(_event(items=[_line("101", quantity)]), None)

@@ -10,6 +10,7 @@ from decimal import Decimal, ROUND_HALF_UP
 from botocore.exceptions import ClientError
 from confirmation_token import make_confirmation_token
 import store_hours
+from menu_pricing import SoldOutError, check_not_sold_out
 
 # Stripe key lives in an SSM SecureString param, never in a Lambda env var.
 # Fetched on the first invocation and cached for the container's lifetime.
@@ -95,6 +96,7 @@ def _compute_subtotal_cents(items):
         menu_item = menu_lookup.get(str(line.get('id')))
         if not menu_item:
             raise ValueError(f"Unknown menu item id: {line.get('id')}")
+        check_not_sold_out(menu_item, line)
 
         quantity = int(line.get('quantity', 1))
         if quantity < 1 or quantity > 50:
@@ -232,6 +234,8 @@ def handler(event, context):
         # client-supplied amount for the intent that actually gets charged.
         try:
             subtotal_cents = _compute_subtotal_cents(items)
+        except SoldOutError as e:
+            return {'statusCode': 409, 'headers': { 'Access-Control-Allow-Origin': ALLOWED_ORIGIN }, 'body': json.dumps({'error': f"{e}. Please remove it from your cart."})}
         except ValueError:
             return {'statusCode': 400, 'headers': { 'Access-Control-Allow-Origin': ALLOWED_ORIGIN }, 'body': json.dumps({'error': 'Invalid order items'})}
         try:

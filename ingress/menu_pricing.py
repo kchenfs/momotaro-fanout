@@ -54,6 +54,24 @@ def menu_lookup(menu_table, now=None):
     return lookup
 
 
+class SoldOutError(ValueError):
+    """An order line names an item staff have marked sold out."""
+
+
+def is_sold_out(menu_item):
+    """Staff mark an item sold out with SoldOut = true on its menu row.
+    A string "true" (easy to type in the DynamoDB console) counts too."""
+    flag = menu_item.get('SoldOut')
+    if isinstance(flag, str):
+        return flag.strip().lower() == 'true'
+    return flag is True
+
+
+def check_not_sold_out(menu_item, line):
+    if is_sold_out(menu_item):
+        raise SoldOutError(f"{menu_item.get('ItemName') or line.get('name') or 'An item'} is sold out")
+
+
 def _selected_options(raw):
     """Options arrive as "Group: Option; Group2: Option2"."""
     selected = {}
@@ -68,7 +86,7 @@ def price_dine_in_items(items, lookup):
     """Return (items with server-side prices, subtotal, total incl. tax).
 
     Raises ValueError for an empty or oversized order, an unknown item or a
-    bad quantity. Prices, names and kitchen locations come from the menu;
+    bad quantity; SoldOutError for a sold-out item. Prices, names and kitchen locations come from the menu;
     the chosen options and anything else on the line are kept as sent.
     """
     if not items or not isinstance(items, list):
@@ -84,6 +102,7 @@ def price_dine_in_items(items, lookup):
         menu_item = lookup.get(str(line.get('id')))
         if not menu_item:
             raise ValueError(f"Unknown menu item: {line.get('name') or line.get('id')}")
+        check_not_sold_out(menu_item, line)
         try:
             quantity = int(line.get('quantity', 1))
         except (TypeError, ValueError):
