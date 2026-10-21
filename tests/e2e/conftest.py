@@ -77,12 +77,13 @@ def stripe_webhook(staging, stripe_test_mode):
 
 @pytest.fixture(scope="session")
 def menu_item():
-    """A real, orderable menu item with no option groups, so its price is just Price."""
+    """A real, orderable menu item with no option groups, so its price is just Price.
+    Skips items staff marked sold out, which the ingress Lambdas now refuse."""
     table = boto3.resource("dynamodb", region_name=REGION).Table(MENU_TABLE)
     candidates = []
     # Items carry large embedding vectors; fetch only what an order line needs.
     kwargs = {
-        "ProjectionExpression": "ItemNumber, ItemName, Price, Options, #loc",
+        "ProjectionExpression": "ItemNumber, ItemName, Price, Options, SoldOut, #loc",
         "ExpressionAttributeNames": {"#loc": "Location"},
     }
     while True:
@@ -92,6 +93,7 @@ def menu_item():
             break
         kwargs["ExclusiveStartKey"] = resp["LastEvaluatedKey"]
     for item in sorted(candidates, key=lambda i: str(i.get("ItemNumber"))):
-        if item.get("ItemNumber") is not None and float(item.get("Price", 0) or 0) > 0 and not item.get("Options"):
+        if item.get("ItemNumber") is not None and float(item.get("Price", 0) or 0) > 0 and not item.get("Options") \
+                and str(item.get("SoldOut", "")).lower() != "true":
             return item
     pytest.fail("no orderable menu item without options found in MomotaroSushiMenu_DB")

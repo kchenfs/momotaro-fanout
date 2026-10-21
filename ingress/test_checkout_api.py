@@ -313,3 +313,27 @@ def test_stripe_key_loaded_from_ssm_once(monkeypatch):
 
     assert api.stripe.api_key == "sk_from_ssm"
     fake_ssm.get_parameter.assert_called_once_with(Name=api.STRIPE_KEY_PARAM, WithDecryption=True)
+
+
+@pytest.mark.parametrize("flag", [True, "true", "TRUE"])
+def test_sold_out_item_returns_409_and_charges_nothing(monkeypatch, flag):
+    fake_table, fake_create = _patch_stripe_and_table(
+        monkeypatch, [{"ItemNumber": 1, "ItemName": "Spider Roll", "Price": "20.00", "SoldOut": flag}])
+
+    resp = api.handler(_event(_real_order_body()), None)
+
+    assert resp["statusCode"] == 409
+    assert "Spider Roll is sold out" in json.loads(resp["body"])["error"]
+    assert not fake_table.put_item.called
+    assert not fake_create.called
+
+
+@pytest.mark.parametrize("flag", [False, "false", None])
+def test_item_not_marked_sold_out_still_orders(monkeypatch, flag):
+    fake_table, fake_create = _patch_stripe_and_table(
+        monkeypatch, [{"ItemNumber": 1, "Price": "20.00", "SoldOut": flag}])
+
+    resp = api.handler(_event(_real_order_body()), None)
+
+    assert resp["statusCode"] == 200
+    assert fake_create.call_args.kwargs["amount"] == 2260

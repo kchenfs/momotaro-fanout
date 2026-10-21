@@ -506,6 +506,24 @@ class MomotaroFanoutStack(Stack):
             ))
             apigw.LambdaRestApi(self, "OrderConfirmationApiEndpoint", handler=order_confirmation_api)
 
+        # Public menu the ordering site reads. Read-only, so staging builds of
+        # the site use this prod one too and staging gets no copy.
+        if is_prod:
+            menu_api = _lambda.Function(self, "MenuApi",
+                runtime=_lambda.Runtime.PYTHON_3_12,
+                handler="menu_api.handler",
+                code=_lambda.Code.from_asset("ingress", exclude=ASSET_EXCLUDES),
+                timeout=Duration.seconds(15),
+                memory_size=512,
+                environment={"MENU_TABLE_NAME": "MomotaroSushiMenu_DB"},
+            )
+            menu_api.add_to_role_policy(iam.PolicyStatement(
+                actions=["dynamodb:Scan"],
+                resources=[f"arn:aws:dynamodb:{self.region}:{self.account}:table/MomotaroSushiMenu_DB"]
+            ))
+            menu_rest_api = apigw.LambdaRestApi(self, "MenuApiEndpoint", handler=menu_api)
+            CfnOutput(self, "MenuApiUrl", value=menu_rest_api.url)
+
         if not is_prod:
             self._add_staging_test_hooks(
                 orders_table=orders_table,

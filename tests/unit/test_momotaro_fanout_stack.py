@@ -79,3 +79,27 @@ def test_only_prod_enforces_store_hours(monkeypatch):
                        "VERIFIED_SENDER_EMAIL": "x@example.com", "TELEGRAM_CHAT_ID": "1"}.items():
         monkeypatch.setenv(key, value)
     assert _checkout_env(_template("prod"))["ENFORCE_STORE_HOURS"] == "1"
+
+
+def test_prod_serves_the_menu_with_sold_out_and_read_only_access(monkeypatch):
+    for key, value in {"DYNAMODB_TABLE_NAME": "orders", "PRINTER_MQTT_TOPIC": "printers/orders/print",
+                       "VERIFIED_SENDER_EMAIL": "x@example.com", "TELEGRAM_CHAT_ID": "1"}.items():
+        monkeypatch.setenv(key, value)
+    template = _template("prod")
+    template.has_resource_properties("AWS::Lambda::Function", {"Handler": "menu_api.handler"})
+    template.has_output("MenuApiUrl", {})
+    # The menu function may only read the menu table.
+    menu_role = next(name for name, res in template.find_resources("AWS::Lambda::Function").items()
+                     if res["Properties"].get("Handler") == "menu_api.handler")
+    role_ref = template.find_resources("AWS::Lambda::Function")[menu_role]["Properties"]["Role"]["Fn::GetAtt"][0]
+    actions = [
+        stmt["Action"]
+        for policy in template.find_resources("AWS::IAM::Policy").values()
+        if {"Ref": role_ref} in policy["Properties"]["Roles"]
+        for stmt in policy["Properties"]["PolicyDocument"]["Statement"]
+    ]
+    assert actions == ["dynamodb:Scan"]
+
+
+def test_staging_has_no_menu_api():
+    assert "menu_api.handler" not in json.dumps(_template("staging").to_json())
